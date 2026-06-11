@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clinical Skills Lab — Patient</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background:#0e0e10; color:#eee; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 18px; }
+  h2 { margin: 6px 0 14px; }
+  .videos { display:grid; grid-template-columns: 2fr 1fr; gap:10px; }
+  video { width:100%; background:#000; border-radius:12px; aspect-ratio:1/1; object-fit:cover; }
+  .label { font-size:12px; color:#888; margin:4px 0; }
+  .row { display:flex; gap:10px; margin:14px 0; }
+  button { padding:11px 20px; border:0; border-radius:9px; font-size:15px; cursor:pointer; font-weight:600; }
+  #connectBtn { background:#2ecc71; color:#062; }
+  #disconnectBtn { background:#e74c3c; color:#fff; }
+  #status { font-size:13px; color:#7fb3ff; margin-bottom:8px; }
+  #log { font-family: ui-monospace, monospace; font-size:12px; background:#000; padding:10px;
+         border-radius:9px; height:150px; overflow:auto; white-space:pre-wrap; color:#9fe; }
+  small { color:#777; display:block; margin-top:8px; }
+  #panel { background:#16161a; border-radius:12px; padding:14px 16px; margin:14px 0; }
+  .panel-title { font-size:13px; color:#aaa; margin-bottom:10px; }
+  .bar-row { display:flex; align-items:center; gap:10px; margin:8px 0; font-size:13px; }
+  .bar-row > span { width:210px; color:#cdd; }
+  .bar { flex:1; height:14px; background:#000; border-radius:7px; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0%; transition:width .3s ease; }
+  .bar-row > b { width:44px; text-align:right; font-variant-numeric:tabular-nums; color:#fff; }
+  .therapist-line { font-size:12px; color:#9a9; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>Patient — Jordan</h2>
+  <div class="videos">
+    <div>
+      <div class="label">PATIENT(Jordan)</div>
+      <video id="botVideo" autoplay playsinline></video>
+    </div>
+    <div>
+      <div class="label">YOU(治疗师 / 摄像头)</div>
+      <video id="selfVideo" autoplay playsinline muted></video>
+    </div>
+  </div>
+  <audio id="botAudio" autoplay></audio>
+
+  <div id="panel">
+    <div class="panel-title">患者状态(实时,每 0.5s 刷新)</div>
+    <div class="bar-row"><span>防御 Guardedness</span><div class="bar"><i id="b-guard"></i></div><b id="v-guard">–</b></div>
+    <div class="bar-row"><span>触及哀伤 Grief</span><div class="bar"><i id="b-grief"></i></div><b id="v-grief">–</b></div>
+    <div class="bar-row"><span>联盟 Alliance</span><div class="bar"><i id="b-alli"></i></div><b id="v-alli">–</b></div>
+    <div class="bar-row"><span>你的语气暖度 (SER)</span><div class="bar"><i id="b-warm"></i></div><b id="v-warm">–</b></div>
+    <div class="bar-row"><span>你的表情投入 (VISION)</span><div class="bar"><i id="b-att"></i></div><b id="v-att">–</b></div>
+    <div class="therapist-line">治疗师刚说:<span id="t-text">–</span></div>
+  </div>
+
+  <div class="row">
+    <button id="connectBtn">连接(开麦克风 + 摄像头)</button>
+    <button id="disconnectBtn">断开</button>
+  </div>
+  <div id="status">未连接</div>
+  <div id="log"></div>
+  <small>
+    需要:① bot 在 :7860 运行(VISION=true);② 允许浏览器的摄像头/麦克风权限。<br/>
+    用 <code>python -m http.server 8000</code> 在本目录起服务,然后开 http://localhost:8000
+  </small>
+</div>
+
+<script type="module">
+// Pipecat 客户端 SDK(通过 esm.sh 直接在浏览器加载,无需打包)
+import { PipecatClient } from "https://esm.sh/@pipecat-ai/client-js";
+import { SmallWebRTCTransport } from "https://esm.sh/@pipecat-ai/small-webrtc-transport";
+
+const BOT_START_URL = "http://localhost:7860/start"; // 先调它注册 session,SDK 再自动连 WebRTC
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { const el=$("log"); el.textContent += m + "\n"; el.scrollTop = el.scrollHeight; console.log(m); };
+const setStatus = (s) => { $("status").textContent = s; };
+
+let client = null;
+
+async function connect() {
+  try {
+    setStatus("连接中…");
+    log("creating client…");
+    client = new PipecatClient({
+      transport: new SmallWebRTCTransport({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      }),
+      enableMic: true,
+      enableCam: true,            // ← 关键:把你的摄像头发给 bot
+      callbacks: {
+        onConnected:        () => { setStatus("已连接 ✅"); log("✅ onConnected"); },
+        onDisconnected:     () => { setStatus("已断开");    log("onDisconnected"); },
+        onBotReady:         () => log("🤖 bot ready"),
+        onBotStartedSpeaking:() => log("🗣️  Jordan 在说话"),
+        onBotStoppedSpeaking:() => log("…Jordan 停"),
+        onTrackStarted: (track, participant) => {
+          const who = participant && participant.local ? "本地" : "bot";
+          log(`track: ${track.kind} (${who})`);
+          if (participant && participant.local) {
+            if (track.kind === "video") $("selfVideo").srcObject = new MediaStream([track]);
+            return;
+          }
+          if (track.kind === "video") $("botVideo").srcObject = new MediaStream([track]);
+          else if (track.kind === "audio") $("botAudio").srcObject = new MediaStream([track]);
+        },
+        onError: (e) => log("❌ error: " + JSON.stringify(e)),
+      },
+    });
+    log("connecting → " + BOT_START_URL);
+    // /start 会注册 session 并返回 sessionId,SDK 据此连 /sessions/{id}/api/offer
+    if (typeof client.startBotAndConnect === "function") {
+      await client.startBotAndConnect({ endpoint: BOT_START_URL });
+    } else {
+      await client.connect({ endpoint: BOT_START_URL });  // 旧版 SDK 回退
+    }
+  } catch (e) {
+    setStatus("连接失败 ❌");
+    log("❌ " + (e?.message || e));
+    log("(若是参数名问题,把 webrtcUrl 改成 connection_url 再试)");
+  }
+}
+
+async function disconnect() {
+  try { await client?.disconnect(); } catch (e) { log("disconnect err: " + e); }
+  client = null;
+  setStatus("已断开");
+}
+
+$("connectBtn").onclick = connect;
+$("disconnectBtn").onclick = disconnect;
+</script>
+
+<script>
+// 实时状态面板:每 0.5s 读 bot 写的 state.json,刷新进度条
+const BARS = {
+  guardedness:            ["b-guard", "v-guard", "#d62728"],
+  grief_access:           ["b-grief", "v-grief", "#1f77b4"],
+  alliance:               ["b-alli",  "v-alli",  "#2ca02c"],
+  therapist_warmth:       ["b-warm",  "v-warm",  "#ff7f0e"],
+  therapist_attentiveness:["b-att",   "v-att",   "#9467bd"],
+};
+async function pollState() {
+  try {
+    const r = await fetch("state.json?_=" + Date.now());  // 防缓存
+    if (!r.ok) return;
+    const s = await r.json();
+    for (const k in BARS) {
+      const [bid, vid, color] = BARS[k];
+      const v = s[k];
+      if (typeof v === "number") {
+        const bar = document.getElementById(bid);
+        bar.style.width = Math.round(v * 100) + "%";
+        bar.style.background = color;
+        document.getElementById(vid).textContent = v.toFixed(2);
+      }
+    }
+    if (s.therapist_text) document.getElementById("t-text").textContent = s.therapist_text;
+  } catch (e) { /* state.json 还没生成就忽略 */ }
+}
+setInterval(pollState, 500);
+pollState();
+</script>
+</body>
+</html>
