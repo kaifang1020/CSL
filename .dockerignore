@@ -1,0 +1,15 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+sessions/
+recordings/
+transcripts/
+*.mp4
+*.wav
+web/state.json
+.git/
+.backup-*/
+.claude/

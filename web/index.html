@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -31,47 +31,52 @@
 </head>
 <body>
 <div class="wrap">
-  <h2>Patient — Jordan</h2>
+  <h2>Simulated Patient — Jordan</h2>
   <div class="videos">
     <div>
-      <div class="label">PATIENT(Jordan)</div>
+      <div class="label">SIMULATED PATIENT</div>
       <video id="botVideo" autoplay playsinline></video>
     </div>
     <div>
-      <div class="label">YOU(治疗师 / 摄像头)</div>
+      <div class="label">CLINICIAN (YOU)</div>
       <video id="selfVideo" autoplay playsinline muted></video>
     </div>
   </div>
   <audio id="botAudio" autoplay></audio>
 
-  <div id="panel">
-    <div class="panel-title">患者状态(实时,每 0.5s 刷新)</div>
-    <div class="bar-row"><span>防御 Guardedness</span><div class="bar"><i id="b-guard"></i></div><b id="v-guard">–</b></div>
-    <div class="bar-row"><span>触及哀伤 Grief</span><div class="bar"><i id="b-grief"></i></div><b id="v-grief">–</b></div>
-    <div class="bar-row"><span>联盟 Alliance</span><div class="bar"><i id="b-alli"></i></div><b id="v-alli">–</b></div>
-    <div class="bar-row"><span>你的语气暖度 (SER)</span><div class="bar"><i id="b-warm"></i></div><b id="v-warm">–</b></div>
-    <div class="bar-row"><span>你的表情投入 (VISION)</span><div class="bar"><i id="b-att"></i></div><b id="v-att">–</b></div>
-    <div class="therapist-line">治疗师刚说:<span id="t-text">–</span></div>
+  <div id="panel" style="display:none">
+    <div class="panel-title">Patient Affective State — real-time</div>
+    <div class="bar-row"><span>Guardedness</span><div class="bar"><i id="b-guard"></i></div><b id="v-guard">–</b></div>
+    <div class="bar-row"><span>Grief Accessibility</span><div class="bar"><i id="b-grief"></i></div><b id="v-grief">–</b></div>
+    <div class="bar-row"><span>Working Alliance</span><div class="bar"><i id="b-alli"></i></div><b id="v-alli">–</b></div>
+    <div class="bar-row"><span>Clinician Vocal Warmth (SER)</span><div class="bar"><i id="b-warm"></i></div><b id="v-warm">–</b></div>
+    <div class="bar-row"><span>Clinician Facial Engagement (VISION)</span><div class="bar"><i id="b-att"></i></div><b id="v-att">–</b></div>
+    <div class="therapist-line">Last clinician utterance: <span id="t-text">–</span></div>
+    <div class="therapist-line">⏱ Response latency (last turn): <span id="lat">–</span></div>
+    <div class="therapist-line">Per-component latency (TTFB): <span id="comp">–</span></div>
   </div>
 
   <div class="row">
-    <button id="connectBtn">连接(开麦克风 + 摄像头)</button>
-    <button id="disconnectBtn">断开</button>
+    <button id="connectBtn">Start Session</button>
+    <button id="disconnectBtn">End Session</button>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#aaa;cursor:pointer;margin-left:auto;">
+      <input type="checkbox" id="toggleState" /> Show affective state
+    </label>
   </div>
-  <div id="status">未连接</div>
+  <div id="status">Idle</div>
   <div id="log"></div>
   <small>
-    需要:① bot 在 :7860 运行(VISION=true);② 允许浏览器的摄像头/麦克风权限。<br/>
-    用 <code>python -m http.server 8000</code> 在本目录起服务,然后开 http://localhost:8000
+    Requires: (1) bot running on :7860 (VISION=true); (2) allow the browser's camera/mic permission.<br/>
+    Serve this folder with <code>python -m http.server 8000</code>, then open http://localhost:8000
   </small>
 </div>
 
 <script type="module">
-// Pipecat 客户端 SDK(通过 esm.sh 直接在浏览器加载,无需打包)
+// Pipecat client SDK (loaded directly in the browser via esm.sh, no bundler)
 import { PipecatClient } from "https://esm.sh/@pipecat-ai/client-js";
 import { SmallWebRTCTransport } from "https://esm.sh/@pipecat-ai/small-webrtc-transport";
 
-const BOT_START_URL = "http://localhost:7860/start"; // 先调它注册 session,SDK 再自动连 WebRTC
+const BOT_START_URL = "http://localhost:7860/start"; // registers a session, then the SDK connects WebRTC
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { const el=$("log"); el.textContent += m + "\n"; el.scrollTop = el.scrollHeight; console.log(m); };
@@ -81,22 +86,22 @@ let client = null;
 
 async function connect() {
   try {
-    setStatus("连接中…");
+    setStatus("Initializing session…");
     log("creating client…");
     client = new PipecatClient({
       transport: new SmallWebRTCTransport({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       }),
       enableMic: true,
-      enableCam: true,            // ← 关键:把你的摄像头发给 bot
+      enableCam: true,            // sends your camera to the bot
       callbacks: {
-        onConnected:        () => { setStatus("已连接 ✅"); log("✅ onConnected"); },
-        onDisconnected:     () => { setStatus("已断开");    log("onDisconnected"); },
+        onConnected:        () => { setStatus("Session active"); log("✅ onConnected"); },
+        onDisconnected:     () => { setStatus("Session ended");  log("onDisconnected"); },
         onBotReady:         () => log("🤖 bot ready"),
-        onBotStartedSpeaking:() => log("🗣️  Jordan 在说话"),
-        onBotStoppedSpeaking:() => log("…Jordan 停"),
+        onBotStartedSpeaking:() => log("🗣️  Jordan speaking"),
+        onBotStoppedSpeaking:() => log("…Jordan stopped"),
         onTrackStarted: (track, participant) => {
-          const who = participant && participant.local ? "本地" : "bot";
+          const who = participant && participant.local ? "local" : "bot";
           log(`track: ${track.kind} (${who})`);
           if (participant && participant.local) {
             if (track.kind === "video") $("selfVideo").srcObject = new MediaStream([track]);
@@ -109,23 +114,23 @@ async function connect() {
       },
     });
     log("connecting → " + BOT_START_URL);
-    // /start 会注册 session 并返回 sessionId,SDK 据此连 /sessions/{id}/api/offer
+    // /start registers a session and returns sessionId; the SDK then connects /sessions/{id}/api/offer
     if (typeof client.startBotAndConnect === "function") {
       await client.startBotAndConnect({ endpoint: BOT_START_URL });
     } else {
-      await client.connect({ endpoint: BOT_START_URL });  // 旧版 SDK 回退
+      await client.connect({ endpoint: BOT_START_URL });  // fallback for older SDK
     }
   } catch (e) {
-    setStatus("连接失败 ❌");
+    setStatus("Connection failed");
     log("❌ " + (e?.message || e));
-    log("(若是参数名问题,把 webrtcUrl 改成 connection_url 再试)");
+    log("(if it's a param-name issue, try connection_url instead of webrtcUrl)");
   }
 }
 
 async function disconnect() {
   try { await client?.disconnect(); } catch (e) { log("disconnect err: " + e); }
   client = null;
-  setStatus("已断开");
+  setStatus("Session ended");
 }
 
 $("connectBtn").onclick = connect;
@@ -133,7 +138,7 @@ $("disconnectBtn").onclick = disconnect;
 </script>
 
 <script>
-// 实时状态面板:每 0.5s 读 bot 写的 state.json,刷新进度条
+// Live state panel: poll the bot's state.json every 0.5s and update the bars
 const BARS = {
   guardedness:            ["b-guard", "v-guard", "#d62728"],
   grief_access:           ["b-grief", "v-grief", "#1f77b4"],
@@ -143,7 +148,7 @@ const BARS = {
 };
 async function pollState() {
   try {
-    const r = await fetch("state.json?_=" + Date.now());  // 防缓存
+    const r = await fetch("state.json?_=" + Date.now());  // cache-bust
     if (!r.ok) return;
     const s = await r.json();
     for (const k in BARS) {
@@ -157,8 +162,26 @@ async function pollState() {
       }
     }
     if (s.therapist_text) document.getElementById("t-text").textContent = s.therapist_text;
-  } catch (e) { /* state.json 还没生成就忽略 */ }
+    if (typeof s.latency_total === "number" && s.latency_total > 0) {
+      document.getElementById("lat").textContent =
+        `total ${s.latency_total.toFixed(1)}s (think ${s.latency_think.toFixed(1)}s + speak ${s.latency_speak.toFixed(1)}s)`;
+    }
+    if (s.component_ttfb && Object.keys(s.component_ttfb).length) {
+      const order = ["STT", "LLM", "TTS", "Avatar"];
+      const parts = order.filter(k => k in s.component_ttfb).map(k => `${k} ${s.component_ttfb[k]}s`);
+      document.getElementById("comp").textContent = parts.join("  ·  ");
+    }
+  } catch (e) { /* state.json not generated yet — ignore */ }
 }
+// Affective-state panel is hidden by default; reveal it only when toggled on.
+const _stateToggle = document.getElementById("toggleState");
+const _statePanel = document.getElementById("panel");
+if (_stateToggle && _statePanel) {
+  _stateToggle.addEventListener("change", () => {
+    _statePanel.style.display = _stateToggle.checked ? "" : "none";
+  });
+}
+
 setInterval(pollState, 500);
 pollState();
 </script>

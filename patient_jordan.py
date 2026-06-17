@@ -16,6 +16,7 @@
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -23,10 +24,14 @@ from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
+    Frame,
     LLMRunFrame,
+    MetricsFrame,
     TranscriptionFrame,
+    TTSAudioRawFrame,
     TTSUpdateSettingsFrame,
 )
+from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -66,7 +71,7 @@ load_dotenv(override=True)
 _LIVE_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "state.json")
 
 
-def _write_live_state(state, therapist_text: str):
+def _write_live_state(state):
     try:
         with open(_LIVE_STATE_FILE, "w") as f:
             json.dump(
@@ -76,12 +81,60 @@ def _write_live_state(state, therapist_text: str):
                     "alliance": round(state.alliance, 3),
                     "therapist_warmth": round(state.therapist_warmth, 3),
                     "therapist_attentiveness": round(state.therapist_attentiveness, 3),
-                    "therapist_text": therapist_text,
+                    "therapist_text": state.last_therapist_text,
+                    "latency_total": round(state.last_latency, 2),
+                    "latency_think": round(state.last_think, 2),
+                    "latency_speak": round(state.last_speak, 2),
+                    "component_ttfb": state.component_ttfb,
                 },
                 f,
             )
     except Exception:
         pass
+
+
+def _friendly(proc: str) -> str:
+    """把 processor 名(OpenAILLMService#0 等)映射成友好名。"""
+    p = proc.lower()
+    if "stt" in p or "deepgram" in p or "whisper" in p:
+        return "STT"
+    if "llm" in p:
+        return "LLM"
+    if "tts" in p:
+        return "TTS"
+    if "simli" in p or "tavus" in p or "video" in p:
+        return "Avatar"
+    return ""
+
+
+class LatencyTracker(FrameProcessor):
+    """测"治疗师说完 → Jordan 第一段音频"的总延迟(拆 think/speak),
+    并顺手收集各组件 TTFB(STT/LLM/TTS/Avatar),写进 state + 日志 + UI。"""
+
+    def __init__(self, state):
+        super().__init__()
+        self.state = state
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        # 各组件 TTFB:从流经的 MetricsFrame 里收集
+        if isinstance(frame, MetricsFrame):
+            for d in frame.data:
+                if isinstance(d, TTFBMetricsData) and d.value:
+                    name = _friendly(d.processor)
+                    if name:
+                        self.state.component_ttfb[name] = round(d.value, 2)
+        if isinstance(frame, TTSAudioRawFrame) and self.state.turn_start > 0:
+            now = time.monotonic()
+            total = now - self.state.turn_start
+            llm_first = self.state.llm_first or now
+            think = max(0.0, llm_first - self.state.turn_start)  # STT尾 + LLM首字
+            speak = max(0.0, now - llm_first)                    # LLM首字 → 第一段音频(TTS)
+            self.state.last_latency, self.state.last_think, self.state.last_speak = total, think, speak
+            self.state.turn_start = 0.0  # 本轮已测,后续音频块不再重复计
+            logger.info(f"⏱ 延迟:总 {total:.2f}s(想 {think:.2f}s + 说 {speak:.2f}s)")
+            _write_live_state(self.state)
+        await self.push_frame(frame, direction)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -95,6 +148,14 @@ class PatientState:
     therapist_warmth: float = 0.5  # SER 写入:治疗师语气暖度(0.5=中性,>暖 <冷);SER 关时恒为 0.5
     therapist_attentiveness: float = 0.5  # VISION 写入:治疗师表情/投入度;VISION 关时恒为 0.5
     memory: list = field(default_factory=list)  # 🔵 慢路用,暂空
+    # —— 延迟测量(运行时用,不进 CSV)——
+    turn_start: float = 0.0          # 治疗师这轮被判定说完的时刻
+    llm_first: float = 0.0           # LLM 吐第一个字的时刻
+    last_latency: float = 0.0        # 上轮"说完→Jordan开口"总延迟(秒)
+    last_think: float = 0.0          # 其中"想"(STT尾+LLM首字)耗时
+    last_speak: float = 0.0          # 其中"说"(LLM首字→第一段音频)耗时
+    last_therapist_text: str = ""    # 上轮治疗师说的话(给 UI 显示)
+    component_ttfb: dict = field(default_factory=dict)  # 各组件本轮 TTFB {STT/LLM/TTS/Avatar: 秒}
 
     def instruction(self) -> str:
         """状态 → 给 Talker(LLM)的导演指示"""
@@ -108,12 +169,20 @@ class PatientState:
                 "and you may bring up Maya if it feels relevant.")
 
     def voice_tone(self) -> str:
-        """状态 → 给 TTS 的语气描述"""
+        """状态 → 给 OpenAI TTS 的自然语言语气描述"""
         if self.guardedness > 0.6:
             return "flat, guarded and clipped, a little cold, withholding"
         elif self.guardedness > 0.35:
             return "quiet and hesitant, careful, slightly tense, with small pauses"
         return "soft and slow, vulnerable, voice a little unsteady, close to tears"
+
+    def voice_cartesia(self):
+        """状态 → 给 Cartesia 的 (emotion, speed)"""
+        if self.guardedness > 0.6:
+            return ("neutral", 1.0)   # 防御:平直、不慢
+        elif self.guardedness > 0.35:
+            return ("neutral", 0.9)   # 谨慎:稍慢
+        return ("sad", 0.8)           # 敞开:脆弱、更慢
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -121,12 +190,17 @@ class PatientState:
 # ════════════════════════════════════════════════════════════════════
 class PatientBrain(FrameProcessor):
     def __init__(self, state: PatientState, context: LLMContext, base_prompt: str,
-                 session_log=None):
+                 session_log=None, tts_kind: str = "openai"):
         super().__init__()
         self.state = state
         self.context = context
         self.base_prompt = base_prompt
         self.session_log = session_log
+        self.tts_kind = tts_kind  # "openai" 或 "cartesia",决定语气设置怎么构造
+        # SER / VISION 对患者状态的【驱动权重】:默认 0 = 只测量/显示,不影响患者回应
+        # (患者只按 transcript + 人设反应);在 .env 设 SER_WEIGHT / VISION_WEIGHT >0 即可让它们重新驱动。
+        self.w_tone = float(os.environ.get("SER_WEIGHT", "0"))
+        self.w_vision = float(os.environ.get("VISION_WEIGHT", "0"))
 
     async def process_frame(self, frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -145,15 +219,24 @@ class PatientBrain(FrameProcessor):
                     f"{self.base_prompt}\n\n{self.state.instruction()}"
                 )
 
-            # —— 🟢 按状态动态调 TTS 语气 ——
+            # —— 🟢 按状态动态调 TTS 语气(按当前 TTS 类型构造对应设置)——
+            if self.tts_kind == "cartesia":
+                from pipecat.services.cartesia.tts import (
+                    CartesiaTTSSettings,
+                    GenerationConfig,
+                )
+
+                emotion, speed = self.state.voice_cartesia()
+                tts_delta = CartesiaTTSSettings(
+                    generation_config=GenerationConfig(emotion=emotion, speed=speed)
+                )
+            else:
+                tts_delta = OpenAITTSSettings(
+                    instructions=f"Speak in a {self.state.voice_tone()} tone. "
+                    f"You are a grieving man in a therapy session."
+                )
             await self.push_frame(
-                TTSUpdateSettingsFrame(
-                    delta=OpenAITTSSettings(
-                        instructions=f"Speak in a {self.state.voice_tone()} tone. "
-                        f"You are a grieving man in a therapy session."
-                    )
-                ),
-                FrameDirection.DOWNSTREAM,
+                TTSUpdateSettingsFrame(delta=tts_delta), FrameDirection.DOWNSTREAM
             )
 
             logger.info(
@@ -166,8 +249,14 @@ class PatientBrain(FrameProcessor):
             if self.session_log:
                 self.session_log.start_turn(frame.text)
 
+            # 延迟测量:标记这轮开始
+            self.state.last_therapist_text = frame.text
+            self.state.turn_start = time.monotonic()
+            self.state.llm_first = 0.0
+            self.state.component_ttfb = {}  # 清空,重新收集本轮各组件 TTFB
+
             # 写实时状态给网页面板
-            _write_live_state(self.state, frame.text)
+            _write_live_state(self.state)
 
         # 原话原样下推(历史保持干净)
         await self.push_frame(frame, direction)
@@ -181,11 +270,11 @@ class PatientBrain(FrameProcessor):
                 "get over", "why don't you", "move on"]
         warm_hits = sum(1 for w in warm if w in t)
         cold_hits = sum(1 for c in cold if c in t)
-        kw_delta = (warm_hits - cold_hits) * 0.12          # 信号①:说了什么(词)
-        # 信号②:怎么说的(SER 语气)。warmth 0.5 中性;SER 关时恒 0.5 → 此项=0,行为不变
-        tone_delta = (self.state.therapist_warmth - 0.5) * 0.4
-        # 信号③:表情(VISION)。权重最小(最噪);VISION 关时恒 0.5 → 此项=0,行为不变
-        vis_delta = (self.state.therapist_attentiveness - 0.5) * 0.2
+        kw_delta = (warm_hits - cold_hits) * 0.12          # 信号①:说了什么(词 / transcript)——始终驱动
+        # 信号②/③:SER 语气 + VISION 表情。默认权重 0 → 只测量、不驱动患者(模式 B)。
+        # SER/VISION 仍照常运行、写入 state、显示在面板;只是不影响患者状态,除非把权重设 >0。
+        tone_delta = (self.state.therapist_warmth - 0.5) * 0.4 * self.w_tone
+        vis_delta = (self.state.therapist_attentiveness - 0.5) * 0.2 * self.w_vision
         delta = kw_delta + tone_delta + vis_delta
         clamp = lambda x: max(0.0, min(1.0, x))
         self.state.guardedness = clamp(self.state.guardedness - delta)
@@ -266,6 +355,30 @@ def _build_stt():
         )
 
 
+def _build_tts():
+    """TTS 选择:.env 里 TTS=cartesia → Cartesia(低延迟);否则默认 OpenAI。
+    返回 (kind, service)。kind 用来告诉 PatientBrain 怎么构造语气设置。"""
+    kind = os.environ.get("TTS", "openai").lower()
+    if kind == "cartesia":
+        from pipecat.services.cartesia.tts import CartesiaTTSService
+
+        logger.info("TTS: Cartesia(低延迟,需 pip install 'pipecat-ai[cartesia]')")
+        return "cartesia", CartesiaTTSService(
+            api_key=os.environ["CARTESIA_API_KEY"],
+            voice_id=os.environ.get(
+                "CARTESIA_VOICE_ID", "71a7ad14-091c-4e8e-a314-022ece01c121"
+            ),
+            text_filters=[CleanTextFilter()],
+        )
+    logger.info("TTS: OpenAI gpt-4o-mini-tts")
+    return "openai", OpenAITTSService(
+        api_key=os.environ["OPENAI_API_KEY"],
+        model="gpt-4o-mini-tts",
+        voice="ash",
+        text_filters=[CleanTextFilter()],
+    )
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info("启动 Jordan...")
 
@@ -276,12 +389,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         api_key=os.environ["OPENAI_API_KEY"],
         model="gpt-4o-mini",
     )
-    tts = OpenAITTSService(
-        api_key=os.environ["OPENAI_API_KEY"],
-        model="gpt-4o-mini-tts",
-        voice="ash",  # 偏年轻男声;可换 alloy/echo/onyx 等
-        text_filters=[CleanTextFilter()],  # 清理空/纯标点碎片,防生成式 TTS 乱编
-    )
+    tts_kind, tts = _build_tts()  # 默认 OpenAI;.env 设 TTS=cartesia 即切 Cartesia
     # 选 avatar:.env 里 AVATAR=tavus → 用 Tavus(唇形更好);否则默认 Simli
     avatar_choice = os.environ.get("AVATAR", "simli").lower()
     if avatar_choice == "tavus":
@@ -317,8 +425,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     from session_log import AssistantCapture, SessionLogger
 
     session_log = SessionLogger(state)  # 每节自动存 sessions/session_*.csv
-    brain = PatientBrain(state, context, JORDAN_PROMPT, session_log=session_log)
-    assistant_capture = AssistantCapture(session_log)
+    brain = PatientBrain(state, context, JORDAN_PROMPT, session_log=session_log, tts_kind=tts_kind)
+    assistant_capture = AssistantCapture(session_log, state)
+    latency_tracker = LatencyTracker(state)
 
     # 传感器可选:SER(语气)和 VISION(表情)都需要"说完"边界帧,所以共用一个前置 VAD
     ser_on = os.environ.get("SER", "").lower() in ("1", "true", "yes")
@@ -350,6 +459,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             llm,                 # ⑤ Talker:生成 Jordan 回复
             assistant_capture,   # ⑤' 抓 Jordan 回复文本 → 写入 session 记录
             tts,                 # ⑥ 文字→语音(语气随状态)
+            latency_tracker,     # ⑥' 测响应延迟(治疗师说完→Jordan开口)
             avatar,              # ⑦ 音频→会动的人脸(Simli 或 Tavus)
             transport.output(),  # ⑧ 推回浏览器
             assistant_agg,       # ⑨ 回复存回历史

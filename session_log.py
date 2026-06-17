@@ -12,6 +12,7 @@ import csv
 import datetime
 import json
 import os
+import time
 
 from loguru import logger
 
@@ -72,14 +73,18 @@ class SessionLogger:
 class AssistantCapture(FrameProcessor):
     """累计 Jordan 的流式回复文本,回复结束时交给 SessionLogger 写入。"""
 
-    def __init__(self, session_log: SessionLogger):
+    def __init__(self, session_log: SessionLogger, state=None):
         super().__init__()
         self.log = session_log
+        self.state = state  # 用于记录 LLM 吐第一个字的时刻(延迟测量)
         self._buf = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, LLMTextFrame):
+            # 记录这轮 LLM 第一个字的时刻(给延迟拆分用)
+            if self.state is not None and self.state.turn_start > 0 and self.state.llm_first == 0:
+                self.state.llm_first = time.monotonic()
             self._buf.append(frame.text)
         elif isinstance(frame, LLMFullResponseEndFrame):
             text = "".join(self._buf).strip()

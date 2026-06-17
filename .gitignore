@@ -18,3 +18,7 @@ sessions/
 # 本地工具配置
 .claude/
 web/state.json
+
+# macOS / 备份目录
+.DS_Store
+.backup-*/
