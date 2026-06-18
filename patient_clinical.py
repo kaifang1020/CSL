@@ -108,6 +108,33 @@ HOW TO ACT (always):
 """
 
 
+def _maybe_swap_llm():
+    """可切换的"大脑":LLM_PROVIDER=anthropic 时,把 run_bot 用的 OpenAI LLM 换成 Claude;
+    不设(默认)则维持 OpenAI——本地 research 不受影响。同样不改 patient_jordan.py:
+    通过改写它的 OpenAILLMService 模块名实现。
+
+    为什么:OpenAI 的 API 从 Railway 连不通(IP 被其 Cloudflare 挡),而 Anthropic 可达;
+    线上用 Claude 还让"对你的引擎 vs HeyGen"更同源(HeyGen 那边病人也是 Claude 驱动)。
+
+    注意:run_bot 里仍会读 os.environ["OPENAI_API_KEY"],所以 Railway 上那个 key 要保留
+    (值不会被真正使用,只是被读一下);Anthropic 用的是 ANTHROPIC_API_KEY。
+    """
+    if os.environ.get("LLM_PROVIDER", "openai").lower() != "anthropic":
+        return  # 默认 OpenAI(本地研究)
+
+    from pipecat.services.anthropic.llm import AnthropicLLMService
+
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+    def _make_anthropic_llm(*args, **kwargs):
+        # run_bot 调的是 OpenAILLMService(api_key=OPENAI..., model="gpt-4o-mini");
+        # 忽略它传入的 OpenAI 参数,改用 Anthropic 自己的 key + 模型。
+        return AnthropicLLMService(api_key=os.environ["ANTHROPIC_API_KEY"], model=model)
+
+    patient_jordan.OpenAILLMService = _make_anthropic_llm
+    logger.info(f"patient_clinical: LLM → Anthropic ({model})")
+
+
 async def bot(runner_args: RunnerArguments):
     """Runner 入口。注入按 /start 请求拼出的提示,然后委托给原版 run_bot。"""
     body = getattr(runner_args, "body", None)
@@ -116,6 +143,7 @@ async def bot(runner_args: RunnerArguments):
     # 关键:run_bot 在运行时从模块全局读取 JORDAN_PROMPT,所以这里改写它即可让原版
     # 逻辑用上我们的提示——不改原文件一行。
     patient_jordan.JORDAN_PROMPT = prompt
+    _maybe_swap_llm()  # 线上(LLM_PROVIDER=anthropic)把大脑换成 Claude;本地默认 OpenAI
     who = "Jordan(默认)" if prompt is _DEFAULT_PROMPT else "传入的病人设定"
     logger.info(f"patient_clinical: 本次 session 扮演 → {who}")
 
