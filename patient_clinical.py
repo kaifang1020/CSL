@@ -135,8 +135,31 @@ def _maybe_swap_llm():
     logger.info(f"patient_clinical: LLM → Anthropic ({model})")
 
 
+def _instrument_simli_frames():
+    """诊断:记录 Simli 实际产出的视频帧(头几帧 + 尺寸)。用来判断"没画面"是
+    Simli 没出帧、还是出了但尺寸和 Daily 视频源(512x512)对不上。轻量、可常开。"""
+    try:
+        from pipecat.services.simli.video import SimliVideoService
+        from pipecat.frames.frames import OutputImageRawFrame
+    except Exception:
+        return
+
+    orig = SimliVideoService.push_frame
+    state = {"n": 0}
+
+    async def logged(self, frame, *a, **k):
+        if isinstance(frame, OutputImageRawFrame):
+            state["n"] += 1
+            if state["n"] <= 3 or state["n"] % 150 == 0:
+                logger.info(f"[simli-frame] #{state['n']} size={getattr(frame, 'size', None)}")
+        return await orig(self, frame, *a, **k)
+
+    SimliVideoService.push_frame = logged
+
+
 async def bot(runner_args: RunnerArguments):
     """Runner 入口。注入按 /start 请求拼出的提示,然后委托给原版 run_bot。"""
+    _instrument_simli_frames()
     body = getattr(runner_args, "body", None)
     prompt = build_prompt(body)
 
