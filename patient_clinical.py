@@ -22,6 +22,8 @@
 #       高并发(多人同时连同一个进程)场景下不应这样用——届时再做更隔离的方案。
 # ----------------------------------------------------------------------
 
+import os
+
 import patient_jordan
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
@@ -29,6 +31,34 @@ from loguru import logger
 
 # 在任何改写发生前,先抓住原始的 Jordan 提示,作为"没传病人时"的兜底。
 _DEFAULT_PROMPT = patient_jordan.JORDAN_PROMPT
+
+
+def _transport_params():
+    """两套传输工厂:webrtc(本地 demo)+ daily(部署/网站,托管媒体,穿透稳)。
+
+    · webrtc 直接复用 patient_jordan 的配置(本地老路不变)。
+    · daily 用同样的音视频参数;它的依赖(daily-python)在工厂内部按需导入——本地
+      没装也不影响 webrtc 这条路,只有真正走 daily(部署时)才会用到。
+    runner 会按 /start 请求里的 transport(createDailyRoom=true → daily)自动选用。
+    """
+    params = dict(patient_jordan.transport_params)  # 含 "webrtc"
+
+    def _daily():
+        from pipecat.transports.daily.transport import DailyParams
+
+        vision = os.environ.get("VISION", "").lower() in ("1", "true", "yes")
+        return DailyParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            video_in_enabled=vision,
+            video_out_enabled=True,
+            video_out_is_live=True,
+            video_out_width=512,
+            video_out_height=512,
+        )
+
+    params["daily"] = _daily
+    return params
 
 
 def build_prompt(body) -> str:
@@ -89,7 +119,7 @@ async def bot(runner_args: RunnerArguments):
     who = "Jordan(默认)" if prompt is _DEFAULT_PROMPT else "传入的病人设定"
     logger.info(f"patient_clinical: 本次 session 扮演 → {who}")
 
-    transport = await create_transport(runner_args, patient_jordan.transport_params)
+    transport = await create_transport(runner_args, _transport_params())
     await patient_jordan.run_bot(transport, runner_args)
 
 
