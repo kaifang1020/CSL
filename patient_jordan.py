@@ -44,8 +44,8 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService, OpenAITTSSettings
-from pipecat.services.simli.video import SimliVideoService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.daily.transport import DailyParams
 from pipecat.utils.text.base_text_filter import BaseTextFilter
 from pipecat.workers.runner import WorkerRunner
 
@@ -161,12 +161,12 @@ class PatientState:
         """状态 → 给 Talker(LLM)的导演指示"""
         if self.guardedness > 0.6:
             return ("[STATE: very guarded] Keep your answer very short (under 8 words). "
-                    "Deflect. Do NOT mention Maya.")
+                    "Deflect. Do NOT bring up your deepest or most painful topic.")
         elif self.guardedness > 0.35:
             return ("[STATE: cautious] The therapist is starting to feel safer. "
                     "Answer in 1-2 sentences. You may hint at your feelings.")
         return ("[STATE: opening up] You feel safer. Speak in 2-3 sentences "
-                "and you may bring up Maya if it feels relevant.")
+                "and you may begin to touch your deeper pain if it feels relevant.")
 
     def voice_tone(self) -> str:
         """状态 → 给 OpenAI TTS 的自然语言语气描述"""
@@ -270,7 +270,10 @@ class PatientBrain(FrameProcessor):
                 "get over", "why don't you", "move on"]
         warm_hits = sum(1 for w in warm if w in t)
         cold_hits = sum(1 for c in cold if c in t)
-        kw_delta = (warm_hits - cold_hits) * 0.12          # 信号①:说了什么(词 / transcript)——始终驱动
+        kw_delta = (warm_hits - cold_hits) * 0.03          # 信号①:说了什么(词 / transcript)——始终驱动
+        # 注:每个暖词只挪 0.03(原为 0.12)。放慢是为了别让一两句共情就把 guardedness 打穿、
+        #     2-3 轮就 opening up。这是"半步"权宜之计;真正的解法是带惯性/非对称/阈值的
+        #     状态动力学(见 patient_state_dynamics.py),会整体替换本函数。
         # 信号②/③:SER 语气 + VISION 表情。默认权重 0 → 只测量、不驱动患者(模式 B)。
         # SER/VISION 仍照常运行、写入 state、显示在面板;只是不影响患者状态,除非把权重设 >0。
         tone_delta = (self.state.therapist_warmth - 0.5) * 0.4 * self.w_tone
@@ -318,10 +321,17 @@ really know where to start, to be honest."
 # ════════════════════════════════════════════════════════════════════
 # VISION 开时采集治疗师摄像头(video_in)
 _VISION = os.environ.get("VISION", "").lower() in ("1", "true", "yes")
+_AF = os.environ.get("AVATAR", "").lower() == "avatarforcing"  # 自建引擎要摄像头驱动反应
 transport_params = {
+    "daily": lambda: DailyParams(
+        audio_in_enabled=True, audio_out_enabled=True,
+        video_in_enabled=_VISION or _AF,
+        video_out_enabled=True, video_out_is_live=True,
+        video_out_width=512, video_out_height=512,
+    ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True, audio_out_enabled=True,
-        video_in_enabled=_VISION,
+        video_in_enabled=_VISION or _AF,
         video_out_enabled=True, video_out_is_live=True,
         video_out_width=512, video_out_height=512,
     ),
@@ -390,9 +400,28 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         model="gpt-4o-mini",
     )
     tts_kind, tts = _build_tts()  # 默认 OpenAI;.env 设 TTS=cartesia 即切 Cartesia
-    # 选 avatar:.env 里 AVATAR=tavus → 用 Tavus(唇形更好);否则默认 Simli
+    # 选 avatar:AVATAR=avatarforcing → 自建流式引擎;=tavus → Tavus;否则默认 Simli
     avatar_choice = os.environ.get("AVATAR", "simli").lower()
-    if avatar_choice == "tavus":
+    if avatar_choice == "avatarforcing":
+        from omegaconf import OmegaConf
+
+        from avatarforcing_service import AvatarForcingVideoService
+        from inference import InferenceAgent
+
+        logger.info("Avatar: AvatarForcing(自建流式引擎,加载模型中…)")
+        af_opt = OmegaConf.load("configs/inference.yaml")
+        af_opt.mae_ckpt_path = "pretrained_dir/motion_autoencoder.pth"
+        af_opt.ckpt_path = "pretrained_dir/flow_transformer.pth"
+        af_opt.result_dir = "results"
+        af_opt.rank, af_opt.ngpus = 0, 1
+        import inference as _inf
+
+        _inf.opt = af_opt
+        af_agent = InferenceAgent(af_opt)
+        _face = af_agent.data_processor.preprocess_face(os.environ.get("AF_FACE", "data/simli.png"))
+        af_ref = af_agent.data_processor.transform(image=_face)["image"].unsqueeze(0)
+        avatar = AvatarForcingVideoService(agent=af_agent, avatar_ref=af_ref)
+    elif avatar_choice == "tavus":
         import aiohttp
 
         from pipecat.services.tavus.video import TavusVideoService
@@ -405,6 +434,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             session=http_session,
         )
     else:
+        from pipecat.services.simli.video import SimliVideoService
+
         is_trinity = os.environ.get("SIMLI_TRINITY", "").lower() in ("1", "true", "yes")
         logger.info(f"Avatar: Simli{'(Trinity)' if is_trinity else ''}")
         avatar = SimliVideoService(
@@ -417,9 +448,21 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     # system 第 0 条 = 人设(PatientBrain 每轮覆盖它,注入当前状态)
     context = LLMContext(messages=[{"role": "system", "content": JORDAN_PROMPT}])
+    # 端点检测:smart_turn 默认静音兜底 stop_secs=3s(语义判不出"说完"时白等 3 秒,延迟大头)→ 调小。
+    # 可用 AF_STOP_SECS 调(小=更跟手但易在停顿处抢话；大=更耐心)。
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+    from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+    from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+    from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+    _stop_secs = float(os.environ.get("AF_STOP_SECS", "1.5"))
+    _turn_strats = UserTurnStrategies(stop=[
+        TurnAnalyzerUserTurnStopStrategy(
+            turn_analyzer=LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=_stop_secs)))])
+    logger.info(f"端点检测 stop_secs={_stop_secs}s(默认 3s；语义判不出时的静音兜底)")
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(), user_turn_strategies=_turn_strats),
     )
 
     from session_log import AssistantCapture, SessionLogger
@@ -430,8 +473,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     latency_tracker = LatencyTracker(state)
 
     # 传感器可选:SER(语气)和 VISION(表情)都需要"说完"边界帧,所以共用一个前置 VAD
-    ser_on = os.environ.get("SER", "").lower() in ("1", "true", "yes")
-    vision_on = os.environ.get("VISION", "").lower() in ("1", "true", "yes")
+    # 研究用传感器：SER(语气→warmth)、VISION(表情→attentiveness)。两者权重默认 0(只测量、不驱动病人)，
+    # AvatarForcing 模式下都暂不需要 → 默认都不挂。SER 轻(本地 wav2vec2)但占 GPU；
+    # VISION 重(GPT-4o-mini)且挂在 STT 之前的临界路径上，会把"说完→调 LLM"堵几秒，更要关。要用再单独开。
+    _ser_env = os.environ.get("SER", "").lower() in ("1", "true", "yes")
+    _vision_env = os.environ.get("VISION", "").lower() in ("1", "true", "yes")
+    ser_on = _ser_env and not _AF
+    vision_on = _vision_env and not _AF
+    if _AF and (_ser_env or _vision_env):
+        logger.info(f"传感器已跳过(AVATAR=avatarforcing 下暂不需要): SER={_ser_env} VISION={_vision_env}")
 
     head = [transport.input()]  # ① 收音频
     if ser_on or vision_on:
@@ -475,6 +525,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("治疗师已连接 —— Jordan 开口")
+        from pipecat.runner.utils import maybe_capture_participant_camera
+
+        # ⚠️ 必须传 framerate>0：helper 默认 framerate=0，Daily 内部 `if framerate>0` 才推帧，
+        # 否则订阅成功但一帧 InputImageRawFrame 都不进管线（cam_total=0 的根因）。25 匹配引擎 25fps/NB=10。
+        await maybe_capture_participant_camera(transport, client, framerate=25)  # 治疗师摄像头(VISION + avatar 反应靠它)
         await worker.queue_frames([LLMRunFrame()])  # 触发开场白
 
     @transport.event_handler("on_client_disconnected")
