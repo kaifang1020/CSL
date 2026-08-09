@@ -18,6 +18,12 @@ import sys
 os.environ["PATIENT"] = "savannah"
 os.environ.setdefault("AF_FACE", "data/savannah/01316.jpg")
 
+# 锚点采样预算：默认 6s 在刚开机的机器上不够（face_alignment 首次调用要把模型载进 GPU，
+# 第一帧就 8~9s，预算用完只采到 1 帧 → 锚退化）。见 patient_candice.py 的实测数据。
+os.environ.setdefault("AF_ANCHOR_BUDGET_S", "30")
+os.environ.setdefault("AF_ANCHOR_STRIDE", "3")
+
+
 _here = os.path.dirname(os.path.abspath(__file__))
 # 直接以 Savannah 环境重跑 patient_jordan.py（同一条 pipeline，参数透传，如 -t daily）
 os.execvp(sys.executable, [sys.executable, os.path.join(_here, "patient_jordan.py"), *sys.argv[1:]])

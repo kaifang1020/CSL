@@ -75,3 +75,6 @@ CARTESIA_VOICE_SAVANNAH=71d08ba7-514f-4e36-9b7d-43ee3b5472dc
 - **`pkill -f <pattern>` 会杀掉自己**：远端命令行里含同样字符串时。用字符类规避：`pgrep -f "patient_jorda[n]"`。
 - **重定向前先 `mkdir -p results`**：新机上 `results/` 不存在会导致 `> results/x.log` 直接失败、脚本没跑。
 - **`deploy.sh` 要带上病人启动器**：曾漏掉 `patient_candice.py` / `patient_savannah.py`。
+- **锚点预算在新机器上不够**：`AF_ANCHOR_BUDGET_S` 默认 6s，但 face_alignment 首次调用要把模型
+  载进 GPU，第一帧就耗 8~9s → 只采到 1 帧 → 锚退化成首块第 0 帧。实测嘴开度 0.0599（听话时嘴微张）
+  vs 预算 30s 时 0.0000。已在 `patient_candice.py` / `patient_savannah.py` 里设成 30s + stride 3。

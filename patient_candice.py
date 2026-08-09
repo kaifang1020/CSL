@@ -20,6 +20,13 @@ os.environ["PATIENT"] = "candice"
 #   一并裁成了人脸帧，选到会把字幕印进每一帧生成画面。
 os.environ.setdefault("AF_FACE", "data/CANDICE_v3/00141.jpg")
 
+# 锚点采样预算：默认 6s 在"刚开机的机器"上不够——face_alignment 首次调用要把模型
+# 载进 GPU，光第一帧就 8~9s，预算当场用完 → 只采到 1 帧 → 退化成"用首块第 0 帧当锚"。
+# 实测：预算 6s 时锚的嘴开度 0.0599（听你说话时嘴微张，正是要避免的）；
+#      预算 30s + stride 3 时采到 17 帧，锚为 0.0000。多花的几秒只在启动时付一次。
+os.environ.setdefault("AF_ANCHOR_BUDGET_S", "30")
+os.environ.setdefault("AF_ANCHOR_STRIDE", "3")
+
 _here = os.path.dirname(os.path.abspath(__file__))
 # 直接以 Candice 环境重跑 patient_jordan.py（同一条 pipeline，参数透传，如 -t daily）
 os.execvp(sys.executable, [sys.executable, os.path.join(_here, "patient_jordan.py"), *sys.argv[1:]])
