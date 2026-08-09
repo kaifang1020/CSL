@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+# patient_candice.py — 用 Candice 人设跑同一条 pipeline（复用 patient_jordan.py，零重复）。
+#
+# 用法：  python patient_candice.py -t daily
+#   等价于  PATIENT=candice python patient_jordan.py -t daily
+#
+# Candice = 抑郁 + 情绪失调 + 慢性自杀意念,戏剧化/泛滥/求助型（persona-only，
+# 不套 Jordan 的 guardedness 状态机）。是用来测试的第二个病人。
+import os
+import sys
+
+os.environ["PATIENT"] = "candice"
+
+# 脸：data/CANDICE_v3/00141.jpg —— 正脸(1.000) + 神情平淡/悲伤（临床上贴合抑郁）+
+#   嘴开度 0.0665（候选里最小）。
+#   ⚠️ 表情优先于"嘴闭合"：这段素材里"嘴完全闭合"的帧只出现在 59s 前后的停顿，
+#   而那几帧带着微笑（01795 等），对抑郁患者是错的。嘴的问题交给 AF_ANCHOR_PICK=mouth
+#   （锚从生成的首块里挑嘴最闭的帧），不必牺牲参考照片的表情。
+#   ⚠️ 素材首尾是黑底标题卡(1-140)和烧录字幕(2188+)，被官方预处理的"全片平均 bbox"
+#   一并裁成了人脸帧，选到会把字幕印进每一帧生成画面。
+os.environ.setdefault("AF_FACE", "data/CANDICE_v3/00141.jpg")
+
+_here = os.path.dirname(os.path.abspath(__file__))
+# 直接以 Candice 环境重跑 patient_jordan.py（同一条 pipeline，参数透传，如 -t daily）
+os.execvp(sys.executable, [sys.executable, os.path.join(_here, "patient_jordan.py"), *sys.argv[1:]])

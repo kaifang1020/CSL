@@ -22,3 +22,25 @@ web/state.json
 # macOS / 备份目录
 .DS_Store
 .backup-*/
+
+# ── 生成物 / 中间产物(2026-08 整理)──────────────────────────
+tmp/
+render_eval_doc*/
+debug_cjk_render*/
+debug_cjk_fonts.*
+tools/node_modules/
+
+# 工具链本地状态
+.synapse/
+.codex_video_review/
+
+# Word 临时锁文件
+.~*.docx
+~$*.docx
+
+# 生成的文档交付物(由 build_*.py / tools/make_*.js 生成,源码已入库)
+*.docx
+*.pptx
+
+# 论文页面截图(第三方版权,不可再分发)
+john-page-*.jpg

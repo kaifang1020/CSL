@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Patient — Daily Direct</title>
+<style>
+  body { background:#0b0b0b; color:#eee; font-family:-apple-system,system-ui,sans-serif; margin:0; padding:16px; }
+  h2 { margin:8px 0; }
+  #bar { margin:10px 0; }
+  button { font-size:15px; padding:8px 16px; border:none; border-radius:8px; cursor:pointer; margin-right:8px; }
+  #startBtn { background:#2ecc71; color:#052; }
+  #stopBtn { background:#e74c3c; color:#fff; }
+  #frame { width:100%; height:78vh; border:1px solid #333; border-radius:10px; margin-top:8px; background:#000; }
+  #log { font-family:ui-monospace,monospace; font-size:12px; color:#8f8; white-space:pre-wrap;
+         background:#000; border:1px solid #222; border-radius:8px; padding:8px; margin-top:8px; max-height:160px; overflow:auto; }
+  .bad { color:#f77; } .ok { color:#7f7; }
+</style>
+</head>
+<body>
+<h2>Simulated Patient — Daily Direct (pose_reg=0.2)</h2>
+<div id="bar">
+  <button id="startBtn">Start Session</button>
+  <button id="stopBtn">End Session</button>
+  <span id="status">idle</span>
+</div>
+<div id="frame"></div>
+<div id="log"></div>
+
+<script src="https://unpkg.com/@daily-co/daily-js"></script>
+<script>
+const BOT_START_URL = "http://localhost:7860/start";
+const $ = (id) => document.getElementById(id);
+const log = (m, c="") => { const d=document.createElement("div"); if(c)d.className=c; d.textContent=m; $("log").appendChild(d); $("log").scrollTop=1e9; };
+const setStatus = (s) => $("status").textContent = s;
+let call = null;
+
+async function start() {
+  try {
+    setStatus("requesting room…");
+    log("POST " + BOT_START_URL + " {createDailyRoom:true}");
+    const res = await fetch(BOT_START_URL, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ createDailyRoom: true }),
+    });
+    if (!res.ok) throw new Error("/start returned " + res.status);
+    const data = await res.json();
+    log("room: " + data.dailyRoom, "ok");
+    if (!data.dailyRoom) throw new Error("no dailyRoom in /start response");
+
+    setStatus("joining Daily…");
+    if (call) { try { await call.destroy(); } catch(e){} call = null; }
+    call = window.DailyIframe.createFrame($("frame"), {
+      showLeaveButton: true,
+      iframeStyle: { width:"100%", height:"100%", border:"0", borderRadius:"10px" },
+    });
+    call.on("joined-meeting", () => { log("✅ joined room", "ok"); setStatus("connected"); });
+    call.on("participant-joined", (e) => log("👤 participant: " + (e.participant?.user_name || e.participant?.session_id)));
+    call.on("track-started", (e) => { if(!e.participant?.local && e.track?.kind==="video") log("🎉 收到患者视频轨道", "ok"); });
+    call.on("error", (e) => log("❌ " + JSON.stringify(e), "bad"));
+    call.on("left-meeting", () => { setStatus("left"); log("left meeting"); });
+
+    await call.join({ url: data.dailyRoom, token: data.dailyToken });
+  } catch (e) {
+    setStatus("failed");
+    log("❌ " + (e?.message || JSON.stringify(e)), "bad");
+  }
+}
+
+async function stop() {
+  try { if (call) { await call.leave(); await call.destroy(); } } catch(e){ log("stop err: "+e); }
+  call = null; setStatus("stopped");
+}
+
+$("startBtn").onclick = start;
+$("stopBtn").onclick = stop;
+</script>
+</body>
+</html>

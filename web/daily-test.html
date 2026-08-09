@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Daily + Simli — local test</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin:0; background:#0e0e10; color:#eee; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 18px; }
+  h2 { margin: 6px 0 4px; }
+  p.note { color:#9a9; font-size:13px; margin:0 0 14px; }
+  video { width:100%; background:#000; border-radius:12px; aspect-ratio:1/1; object-fit:cover; }
+  .row { display:flex; gap:10px; margin:14px 0; }
+  button { padding:11px 20px; border:0; border-radius:9px; font-size:15px; cursor:pointer; font-weight:600; }
+  #connectBtn { background:#2ecc71; color:#062; }
+  #disconnectBtn { background:#e74c3c; color:#fff; }
+  #status { font-size:13px; color:#7fb3ff; margin-bottom:8px; }
+  #log { font-family: ui-monospace, monospace; font-size:12px; background:#000; padding:10px;
+         border-radius:9px; height:240px; overflow:auto; white-space:pre-wrap; color:#9fe; }
+  .ok { color:#5fe28a; } .bad { color:#ff8a8a; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>Daily + Simli — 本地诊断</h2>
+  <p class="note">在本机跑 <code>patient_clinical.py</code>(Daily 传输)+ Simli。如果这里的患者视频动起来,
+  说明 Simli+Daily 在你 Mac 上是好的 → 卡住的是 Railway 环境,不是 Daily。</p>
+
+  <div class="label">SIMULATED PATIENT</div>
+  <video id="botVideo" autoplay playsinline></video>
+  <audio id="botAudio" autoplay></audio>
+
+  <div class="row">
+    <button id="connectBtn">Connect</button>
+    <button id="disconnectBtn">Disconnect</button>
+  </div>
+  <div id="status">Idle</div>
+  <div id="log"></div>
+</div>
+
+<script type="module">
+import { PipecatClient } from "https://esm.sh/@pipecat-ai/client-js";
+import { DailyTransport } from "https://esm.sh/@pipecat-ai/daily-transport";
+
+const BOT_START_URL = "http://localhost:7860/start";
+const $ = (id) => document.getElementById(id);
+const log = (m, cls) => {
+  const el = $("log");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = m + "\n";
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+  console.log(m);
+};
+const setStatus = (s) => { $("status").textContent = s; };
+
+let client = null;
+let sawVideo = false;
+
+async function connect() {
+  sawVideo = false;
+  try {
+    setStatus("connecting…");
+    log("creating Daily client…");
+    client = new PipecatClient({
+      transport: new DailyTransport(),
+      enableMic: true,
+      enableCam: false,
+      callbacks: {
+        onConnected: () => log("✅ onConnected", "ok"),
+        onDisconnected: () => log("onDisconnected"),
+        onBotReady: () => log("🤖 bot ready"),
+        onBotStartedSpeaking: () => log("🗣️ bot speaking"),
+        onTrackStarted: (track, p) => {
+          const who = p?.local ? "local" : "BOT";
+          log(`track: ${track.kind} (${who})`, track.kind === "video" && !p?.local ? "ok" : "");
+          if (p?.local) return;
+          if (track.kind === "video") {
+            sawVideo = true;
+            $("botVideo").srcObject = new MediaStream([track]);
+            $("botVideo").play?.().catch((e) => log("video play() failed: " + e, "bad"));
+            log("🎉 收到 BOT 视频轨道 —— Simli+Daily 在本地是好的!", "ok");
+          } else if (track.kind === "audio") {
+            $("botAudio").srcObject = new MediaStream([track]);
+          }
+        },
+        onError: (e) => log("❌ error: " + JSON.stringify(e?.data ?? e), "bad"),
+      },
+    });
+    log("connecting → " + BOT_START_URL + " (createDailyRoom)");
+    const requestData = { createDailyRoom: true };
+    if (typeof client.startBotAndConnect === "function") {
+      await client.startBotAndConnect({ endpoint: BOT_START_URL, requestData });
+    } else {
+      await client.connect({ endpoint: BOT_START_URL, requestData });
+    }
+    setStatus("connected");
+    setTimeout(() => {
+      if (!sawVideo) log("⚠️ 15s 内没收到视频轨道 —— Simli 在本地也没出画(看 bot 终端日志)", "bad");
+    }, 15000);
+  } catch (e) {
+    setStatus("failed");
+    log("❌ " + (e?.message || JSON.stringify(e)), "bad");
+  }
+}
+
+async function disconnect() {
+  try { await client?.disconnect(); } catch (e) { log("disconnect err: " + e); }
+  client = null;
+  setStatus("disconnected");
+}
+
+$("connectBtn").onclick = connect;
+$("disconnectBtn").onclick = disconnect;
+</script>
+</body>
+</html>

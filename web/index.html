@@ -31,7 +31,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h2>Simulated Patient — Jordan</h2>
+  <h2>Simulated Patient — Candice</h2>
   <div class="videos">
     <div>
       <div class="label">SIMULATED PATIENT</div>
@@ -71,65 +71,63 @@
   </small>
 </div>
 
-<script type="module">
-// Pipecat client SDK (loaded directly in the browser via esm.sh, no bundler)
-import { PipecatClient } from "https://esm.sh/@pipecat-ai/client-js";
-import { SmallWebRTCTransport } from "https://esm.sh/@pipecat-ai/small-webrtc-transport";
-
-const BOT_START_URL = "http://localhost:7860/start"; // registers a session, then the SDK connects WebRTC
+<!-- Daily JS (call object) — 媒体经 Daily 云中继,即使 bot 通过 SSH 隧道访问也能通
+     (WebRTC 点对点的媒体流穿不过 SSH 隧道,原来的 SmallWebRTCTransport 因此收不到摄像头/画面)。
+     bot 以 `-t daily` 启动;/start 创建 Daily 房间并返回 {dailyRoom, dailyToken}。
+     UI 完全不变:患者视频→#botVideo,你的摄像头→#selfVideo,患者音频→#botAudio。-->
+<script src="https://unpkg.com/@daily-co/daily-js"></script>
+<script>
+const BOT_START_URL = "http://localhost:7860/start";
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { const el=$("log"); el.textContent += m + "\n"; el.scrollTop = el.scrollHeight; console.log(m); };
 const setStatus = (s) => { $("status").textContent = s; };
 
-let client = null;
+let call = null;
 
 async function connect() {
   try {
     setStatus("Initializing session…");
-    log("creating client…");
-    client = new PipecatClient({
-      transport: new SmallWebRTCTransport({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      }),
-      enableMic: true,
-      enableCam: true,            // sends your camera to the bot
-      callbacks: {
-        onConnected:        () => { setStatus("Session active"); log("✅ onConnected"); },
-        onDisconnected:     () => { setStatus("Session ended");  log("onDisconnected"); },
-        onBotReady:         () => log("🤖 bot ready"),
-        onBotStartedSpeaking:() => log("🗣️  Jordan speaking"),
-        onBotStoppedSpeaking:() => log("…Jordan stopped"),
-        onTrackStarted: (track, participant) => {
-          const who = participant && participant.local ? "local" : "bot";
-          log(`track: ${track.kind} (${who})`);
-          if (participant && participant.local) {
-            if (track.kind === "video") $("selfVideo").srcObject = new MediaStream([track]);
-            return;
-          }
-          if (track.kind === "video") $("botVideo").srcObject = new MediaStream([track]);
-          else if (track.kind === "audio") $("botAudio").srcObject = new MediaStream([track]);
-        },
-        onError: (e) => log("❌ error: " + JSON.stringify(e)),
-      },
+    log("registering session → " + BOT_START_URL);
+    const startRes = await fetch(BOT_START_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ createDailyRoom: true }),
     });
-    log("connecting → " + BOT_START_URL);
-    // /start registers a session and returns sessionId; the SDK then connects /sessions/{id}/api/offer
-    if (typeof client.startBotAndConnect === "function") {
-      await client.startBotAndConnect({ endpoint: BOT_START_URL });
-    } else {
-      await client.connect({ endpoint: BOT_START_URL });  // fallback for older SDK
-    }
+    if (!startRes.ok) throw new Error(`/start returned ${startRes.status}`);
+    const data = await startRes.json();
+    if (!data.dailyRoom) throw new Error("/start did not return dailyRoom");
+    log("room: " + data.dailyRoom);
+
+    if (call) { try { await call.destroy(); } catch (e) {} }
+    call = window.DailyIframe.createCallObject({ subscribeToTracksAutomatically: true });
+    call.on("joined-meeting",     () => { setStatus("Session active"); log("✅ joined room"); });
+    call.on("participant-joined", (e) => log("👤 " + (e.participant?.user_name || "patient") + " joined"));
+    call.on("left-meeting",       () => { setStatus("Session ended"); log("left meeting"); });
+    call.on("error",              (e) => log("❌ error: " + JSON.stringify(e)));
+    call.on("track-started", (e) => {
+      const p = e.participant, track = e.track;
+      const who = p?.local ? "local" : "patient";
+      log(`track: ${track.kind} (${who})`);
+      if (p?.local) {
+        if (track.kind === "video") $("selfVideo").srcObject = new MediaStream([track]);
+        return;
+      }
+      if (track.kind === "video") $("botVideo").srcObject = new MediaStream([track]);
+      else if (track.kind === "audio") $("botAudio").srcObject = new MediaStream([track]);
+    });
+
+    setStatus("Joining Daily…");     // 触发浏览器摄像头/麦克风授权
+    await call.join({ url: data.dailyRoom, token: data.dailyToken, startVideoOff: false, startAudioOff: false });
   } catch (e) {
     setStatus("Connection failed");
     log("❌ " + (e?.message || e));
-    log("(if it's a param-name issue, try connection_url instead of webrtcUrl)");
   }
 }
 
 async function disconnect() {
-  try { await client?.disconnect(); } catch (e) { log("disconnect err: " + e); }
-  client = null;
+  try { if (call) { await call.leave(); await call.destroy(); } } catch (e) { log("disconnect err: " + e); }
+  call = null;
   setStatus("Session ended");
 }
 

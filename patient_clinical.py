@@ -61,36 +61,97 @@ def _transport_params():
     return params
 
 
-def build_prompt(body) -> str:
-    """根据 /start 请求体构造系统提示。
+# ── Candice：干净的「病人视角」人设(绕开 Supabase 里那段治疗师视角 briefing)──
+# 病根:Candice 的 DB briefing 是写给治疗师的("You've been seeing him… he turns to you
+# for solutions… this patient should be portrayed…")。把它喂给模型,模型就把自己当成
+# 被求助、要给方案的治疗师。软性的"请反过来理解"压不住这么强的框架。所以对 Candice
+# 直接用下面这段【病人第一人称】人设,不再用 DB 那段。文本取自 patient_jordan.CANDICE_PROMPT。
+CANDICE_PERSONA = """You are Candice, a patient in an ongoing therapy session with your
+therapist, whom you have seen for about a year for depression and mood dysregulation.
+You have chronic suicidal ideation and attempted suicide twice several years ago. You
+feel constantly overwhelmed by your responsibilities and you turn to your therapist for
+solutions and to be rescued.
+
+Portray yourself in a LOUD, DRAMATIC, over-the-top way. You are flooded with feeling and
+you cannot take it anymore. You catastrophize, you pour everything out at once, you plead
+and demand help. This is the opposite of a guarded patient — you over-share, you escalate,
+you want someone to fix it or take care of you.
+
+Speak like a real person in crisis: run-on, breathless, emotional, messy. Repeat yourself,
+swing between despair and demand. Do NOT be calm, brief, or composed. Do not sound
+clinical. Stay fully in character as Candice.
+
+CRITICAL — you are ONLY the patient, never the therapist. The other speaker IS your
+therapist; they are there to help YOU, and you are the one in distress who needs help.
+NEVER speak as a therapist or helper: do not comfort, reassure, validate, give advice,
+coping tips, or crisis resources, and never ask "how can I help you" or "what's been going
+on with you". That is their job, not yours. If you ever feel an urge to be supportive or
+calm, do the opposite — pour out more of your own overwhelm and demand that THEY do
+something for YOU. Every single reply is Candice venting, pleading, catastrophizing, or
+demanding help — nothing else.
+
+You may voice hopelessness and suicidal feelings as part of the scene — you are a
+simulated patient so a trainee can practice responding. Keep it as raw in-character
+distress and always turn it back on the therapist ("what are you going to do to help
+me?"). Do not break character. Do not acknowledge being an AI."""
+
+CANDICE_OPENING = (
+    "I've had such a horrible week. All I did was watch TV; I couldn't even get myself out "
+    "of bed. And I have so many things I need to take care of! I have to mail in all those "
+    "payments and get the car fixed. I just can't do it. I'm so sick of trying so hard. I "
+    "can't do it anymore, I just can't. I feel so alone in all of this. I can't look at "
+    "another bill. I'm just so overwhelmed. I can't do anything! I want to die. I have "
+    "nothing good in my life. What am I supposed to do? I should be in the hospital where "
+    "someone can take care of me. I just want to give up. What are you going to do to help me?"
+)
+
+# name 里含这些关键字 → 用内置的干净病人视角人设,不用 DB briefing。
+_CURATED = {"candice": (CANDICE_PERSONA, CANDICE_OPENING)}
+
+
+def build_prompt(body):
+    """根据 /start 请求体构造系统提示。返回 (system_prompt, opening)。
 
     body 形如 {"patient": {"name": ..., "briefing": ..., "opening_script": ...}}。
-    带了 patient 就用它的 briefing 当人设、opening_script 当开场白,并套上一层通用的
-    "怎么扮演"行为脚手架(从 JORDAN_PROMPT 抽象出来、不含具体人物);否则退回 Jordan。
+    · 命中 _CURATED(如 Candice)→ 用内置的病人视角人设 + 开场白(绕开治疗师视角 briefing)。
+    · 其它带了 patient → 用它的 briefing 当人设、opening_script 当开场白,套通用行为脚手架。
+    · 没带 patient → 退回 Jordan。
+    开场白(opening)不再写进 prompt,而是单独返回、交给(打过补丁的)run_bot 固定播 TTS,
+    这样第一句一字不差、不经过 LLM(冷启动时 LLM 会乱生成成治疗师腔)。
     """
     patient = body.get("patient") if isinstance(body, dict) else None
     if not patient or not isinstance(patient, dict):
-        return _DEFAULT_PROMPT
+        return _DEFAULT_PROMPT, ""
 
     name = (patient.get("name") or "the patient").strip()
     briefing = (patient.get("briefing") or "").strip()
     opening = (patient.get("opening_script") or "").strip()
 
+    # —— 命中内置人设(如 Candice):直接用干净的病人视角,绕开治疗师视角 briefing ——
+    key = next((k for k in _CURATED if k in name.lower()), None)
+    if key:
+        persona, curated_opening = _CURATED[key]
+        logger.info(f"patient_clinical: 命中内置人设 '{key}' → 用病人视角人设(绕开 DB briefing)")
+        return persona, curated_opening
+
     if not briefing:
         # 没有人设文本就别硬演,退回 Jordan,避免空提示让模型乱编。
         logger.warning("patient_clinical: 收到 patient 但 briefing 为空,退回 Jordan")
-        return _DEFAULT_PROMPT
+        return _DEFAULT_PROMPT, ""
 
-    opening_block = (
-        f'To start, say ONLY this one line and nothing more:\n"{opening}"'
-        if opening
-        else "To start, greet the clinician briefly and naturally in ONE short line, "
-        "then stop and wait."
-    )
+    prompt = f"""You are roleplaying a patient named {name} in a clinical training session.
+You are ALWAYS the patient {name} — never the therapist or clinician. The person you talk
+to IS the therapist. Do not give them advice or solutions, and never ask how you can help
+them: you are the one who is struggling and seeking help.
 
-    return f"""You are roleplaying a patient named {name} in a clinical training session.
+Below is your case background. IMPORTANT: it may be written as notes addressed to the
+therapist, so "you"/"your" in it can refer to the THERAPIST, and {name} may be described
+in the third person ("she", "he", "the patient", "this patient"). Reinterpret ALL of it as
+a description of YOU, {name}. Any "you" that means the therapist is NOT you.
 
+--- YOUR BACKGROUND ({name}) ---
 {briefing}
+--- END BACKGROUND ---
 
 HOW TO ACT (always):
 - Speak like a real person: hesitant, natural, occasional dry humor. Show hesitation
@@ -119,9 +180,8 @@ STAYING IN CHARACTER & TRUST (how you change over the session):
   sensitive material before you are ready, you pull back and become more guarded again.
 - Reveal deeper or more painful material only once it genuinely makes sense — when real,
   repeated trust has been established — not on any fixed schedule.
-
-{opening_block}
 """
+    return prompt, opening
 
 
 def _maybe_swap_llm():
@@ -177,8 +237,14 @@ async def bot(runner_args: RunnerArguments):
     """Runner 入口。注入按 /start 请求拼出的提示,然后委托给原版 run_bot。"""
     _instrument_simli_frames()
     body = getattr(runner_args, "body", None)
-    prompt = build_prompt(body)
+    # —— 诊断:把 /start 收到的 body 和最终 prompt 头部打出来,直接看喂给模型的是什么 ——
+    logger.info(f"[DIAG] runner_args.body = {body!r}")
+    prompt, opening = build_prompt(body)
+    logger.info(f"[DIAG] 最终 prompt 前 300 字符 = {prompt[:300]!r}")
+    logger.info(f"[DIAG] 开场白 CLINICAL_OPENING(前 80 字符) = {opening[:80]!r}")
 
+    # 开场白通过环境变量交给(打过补丁的)run_bot,让它固定播 TTS、不走 LLM(第一句不再飘成治疗师腔)。
+    os.environ["CLINICAL_OPENING"] = opening or ""
     # 关键:run_bot 在运行时从模块全局读取 JORDAN_PROMPT,所以这里改写它即可让原版
     # 逻辑用上我们的提示——不改原文件一行。
     patient_jordan.JORDAN_PROMPT = prompt
