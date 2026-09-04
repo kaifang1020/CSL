@@ -20,7 +20,18 @@ os.environ["PATIENT"] = "greg"
 # 旧的 data/GREG_v3/01920.jpg 是从视频里裁的,脸宽仅 183px → 放大 1.40x,锐度 16.1;
 # 这张锐度 269.7(16.8 倍),而嘴闭合/睁眼/正脸各项不差。参考帧决定外观基线,
 # 缩放方向从"补像素"变成"丢冗余"是画质提升最实在的一步。
-os.environ.setdefault("AF_FACE", "data/greg_hq.png")
+# 参考帧：data/greg_hq_v2.png（2026-09-04 换）。
+#   换的理由不是清晰度，是【临床相符】：旧的 greg_hq.png 红润饱满、眼神警觉、
+#   嘴微张且嘴角略上扬，看起来像个健康的退休老人——而 GREG_PROMPT 写的是
+#   "calm, articulate and resigned"、"affect is flatter than a younger patient's"。
+#   参考帧决定整个外观基线，所以这是【每一帧都在犯】的错，直接违反评估框架里的
+#   Frame-level B · Facial-state congruence。
+#   新图：肤色偏灰、面颊削瘦、眼睑沉、嘴闭合且嘴角平——和人设相符。
+#   ⚠️ 代价：锐度 175 vs 旧图 270，清晰度略降（仍远高于原始视频帧的 16）。
+#   ⚠️ 旧图保留在 frozen/v1-golden/ref_frames/GREG_hq.png，想回退改回 data/greg_hq.png。
+#   ⏳ 待验证：mouth/smile 关键点数值（本地无 face_alignment，要等服务器）。
+#      预期新图更好——旧图嘴微张+嘴角上扬，可能正是"露齿笑 14~17% 帧"的源头之一。
+os.environ.setdefault("AF_FACE", "data/greg_hq_v2.png")
 
 # 锚点采样预算:默认 6s 在刚开机的机器上不够——face_alignment 首次调用要把模型载进
 # GPU,光第一帧就 8~9s,预算当场用完 → 只采到 1 帧 → 锚退化。见 patient_candice.py。
