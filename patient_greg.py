@@ -16,7 +16,11 @@ os.environ["PATIENT"] = "greg"
 #   ⚠️ 素材首尾是黑底卡片:0–8.04s 标题卡「Greg」、79.55–87.55s「Now it's your turn to speak.」
 #   官方预处理用全片平均 bbox,会把这些黑卡一并裁成「人脸帧」。25fps 下真人区间约为
 #   第 201–1988 帧,选参考帧必须限定在这个范围内。
-os.environ.setdefault("AF_FACE", "data/GREG_v3/01920.jpg")
+# 高清参考图:1254x1254,脸宽 477px → 裁剪框约 953px,到 512 是【缩小 0.54x】。
+# 旧的 data/GREG_v3/01920.jpg 是从视频里裁的,脸宽仅 183px → 放大 1.40x,锐度 16.1;
+# 这张锐度 269.7(16.8 倍),而嘴闭合/睁眼/正脸各项不差。参考帧决定外观基线,
+# 缩放方向从"补像素"变成"丢冗余"是画质提升最实在的一步。
+os.environ.setdefault("AF_FACE", "data/greg_hq.png")
 
 # 锚点采样预算:默认 6s 在刚开机的机器上不够——face_alignment 首次调用要把模型载进
 # GPU,光第一帧就 8~9s,预算当场用完 → 只采到 1 帧 → 锚退化。见 patient_candice.py。

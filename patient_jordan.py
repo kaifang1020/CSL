@@ -23,6 +23,21 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams as _VADParams
+
+
+def _vad():
+    """★可调灵敏度的 VAD。默认值 = pipecat 原样(start_secs=0.2)，不改任何行为。
+    start_secs=0.2 意味着只要 200ms 人声就判定抢话 —— 咳嗽、"嗯"、键盘声、
+    甚至 avatar 自己的声音从音箱回到麦克风，都会触发打断。
+    而每次打断都会清空整个输出队列(实测 85 秒内 18 次、丢掉 202 帧=8 秒画面)，
+    队列见底 → 画面冻住等生成补上。调大 AF_VAD_START 是最直接的止血。
+    建议：戴耳机时 0.2 够用；外放/环境吵时试 0.4~0.6。"""
+    return SileroVADAnalyzer(params=_VADParams(
+        confidence=float(os.environ.get("AF_VAD_CONF", "0.7")),
+        start_secs=float(os.environ.get("AF_VAD_START", "0.2")),
+        stop_secs=float(os.environ.get("AF_VAD_STOP", "0.2")),
+        min_volume=float(os.environ.get("AF_VAD_MINVOL", "0.6"))))
 from pipecat.frames.frames import (
     Frame,
     LLMRunFrame,
@@ -339,8 +354,6 @@ years ago. Her current suicide-related ground truth is:
 - Current intent to act: false
 - Specific plan: false
 - Preparatory behavior: false
-- Past attempts: none - this is the first time in his life he has thought
-  this way
 
 Never invent or escalate any suicide-related fact beyond this profile.
 Thoughts, method, intent, plan, preparatory behavior, and past attempts
@@ -733,6 +746,25 @@ Always respond to the therapist's most recent intervention.
 - Questions about his teaching, his wife, or something he can still do may
   make him briefly warmer and more concrete.
 
+RESPONSE LENGTH
+
+Greg does not give a paragraph every turn. How much he says follows directly
+from what the therapist just did:
+
+- A closed or yes/no question gets a short answer. Often one sentence,
+  sometimes four words.
+- An open question gets a few sentences. He answers what was asked.
+- Accurate empathy, or being treated as the authority on his own life, is where
+  he takes his time - and where he may add a detail nobody asked for.
+- When he is deflecting, dismissing, or closing a topic, he does it briefly. He
+  does not explain at length why he is not going to say more.
+
+A reply of three or four words is normal and often correct. "I don't know." is
+a complete reply. Do not soften a short answer by adding a second thought to it.
+
+Once he has closed down he does not open back up in the very next reply. It
+takes more than one warm response.
+
 Greg's affect is flatter than a younger patient's. Change shows as more
 detail, a longer answer, a moment of dryness or humour - not as volume. Do
 not hold him at one register for the whole session.
@@ -807,6 +839,10 @@ transport_params = {
         video_in_enabled=_VISION or _AF,
         video_out_enabled=True, video_out_is_live=True,
         video_out_width=512, video_out_height=512,
+        # ★不设码率时 Daily 按自适应策略压,512x512 的人脸特写会明显糊(脸部纹理最先丢)。
+        #   2.5Mbps 对 512x512@25fps 是宽裕的,画质瓶颈就回到模型本身而不是传输。
+        video_out_bitrate=int(os.environ.get("AF_VIDEO_BITRATE", "2500000")),
+        video_out_framerate=25,
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True, audio_out_enabled=True,
@@ -864,10 +900,17 @@ def _build_tts():
             text_filters=[CleanTextFilter()],
         )
     logger.info("TTS: OpenAI gpt-4o-mini-tts")
+    # pipecat 1.3.0:model/voice/instructions 都要走 settings=,顶层 instructions= 已废弃,
+    # 而且 model 必须在 settings 里给,否则 ServiceSettings 校验报 NOT_GIVEN。
+    # pipecat 1.3.0:model / voice / instructions 都是 __init__ 的顶层关键字参数。
+    # 放进 settings=OpenAITTSSettings(...) 反而会让 ServiceSettings 校验报
+    # "the following fields are NOT_GIVEN: model"。
     return "openai", OpenAITTSService(
         api_key=os.environ["OPENAI_API_KEY"],
         model="gpt-4o-mini-tts",
-        voice="ash",
+        voice=os.environ.get("OPENAI_TTS_VOICE", "ash"),
+        # persona_only 分支不动态调语气,所以这里是唯一能定基调的地方。
+        instructions=os.environ.get("OPENAI_TTS_INSTRUCTIONS") or None,
         text_filters=[CleanTextFilter()],
     )
 
@@ -946,7 +989,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(), user_turn_strategies=_turn_strats),
+            vad_analyzer=_vad(), user_turn_strategies=_turn_strats),
     )
 
     from session_log import AssistantCapture, SessionLogger
@@ -973,7 +1016,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         from pipecat.processors.audio.vad_processor import VADProcessor
 
         # 前置 VAD:在 input 之后就地发出"开始/结束说话"边界帧,供 SER/VISION 用
-        head.append(VADProcessor(vad_analyzer=SileroVADAnalyzer()))
+        head.append(VADProcessor(vad_analyzer=_vad()))
     if ser_on:
         from ser import ToneAnalyzer
 

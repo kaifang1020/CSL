@@ -50,11 +50,42 @@ FLUSH_INTERRUPT = int(os.environ.get("AF_FLUSH_INTERRUPT", "3"))   # 3 块≈1.2
 # 双模式 cfg（可调）：说话求干净对口型(弱反应)，倾听求强反应(真人脸/语音驱动)
 U_SPEAK = float(os.environ.get("AF_U_SPEAK", "0.0"))
 U_LISTEN = float(os.environ.get("AF_U_LISTEN", "1.0"))
+# ★a_cfg 同样分模式。原先它定死在构造函数(=2.0)、全程不切，倾听时是个隐性的"别动"压制源：
+#   合成式 v = v_uncond + a_cfg*(v_aud - v_uncond) + u_cfg*(v_user - v_uncond)；
+#   倾听时喂给 wa 的是纯静音 → (v_aud - v_uncond) 这个方向就是"闭嘴不发声的静止感"，
+#   还被 ×2 夸张化，正好和 u_cfg=1.0 推的"对治疗师有反应"对着干。调低它把这股力松开。
+#   默认 2.0 = 保持原行为，不改任何东西。
+A_SPEAK = float(os.environ.get("AF_A_SPEAK", "2.0"))
+A_LISTEN = float(os.environ.get("AF_A_LISTEN", "2.0"))
+# ★pose 正则也必须分模式。它在 step() 里没有任何模式判断，AF_POSE_REG 是全程生效的——
+#   而锚点是一张"嘴闭合、姿态居中"的脸。倾听要它强(压幅度、维持抑郁基线)，
+#   说话要它弱：λ 一大，激动时该有的大幅头部动作会被一起拽回中位，人就"变呆"了。
+#   实测 λ 从 0.2 提到 0.4 后，说话时头部大动作明显消失。
+#   两者都默认回落到 AF_POSE_REG，不设就是原来的全程同值行为。
+_PR = os.environ.get("AF_POSE_REG", "0")
+POSE_REG_SPEAK = float(os.environ.get("AF_POSE_REG_SPEAK", _PR))
+POSE_REG_LISTEN = float(os.environ.get("AF_POSE_REG_LISTEN", _PR))
 CAM_WINDOW = 0.5        # 距上次收到摄像头帧 < 这么多秒，认为摄像头在开
 FACE_REDETECT = 12      # 每隔多少帧重新检测一次人脸框（其余帧复用，省算力）
 RCTX = int(os.environ.get("AF_RCTX", "10"))   # 音频前瞻帧数：每块等多少帧"未来"音频。小=低延迟/口型略糙
+# ★说话态跳过治疗师视觉通道。solve_cfg 里 x_cat=x_t.repeat(3,1,1) 永远算 3 路分支，
+#   没有 u_cfg_scale==0 的短路；说话态 AF_U_SPEAK=0.0 → 第 3 路算完乘 0 丢弃。
+#   人脸检测 27.8 + 裁剪 19.5 + 运动编码 20 ≈ 67ms/块 全白花。设 0 可关掉这个优化。
+SKIP_USER_ZERO = os.environ.get("AF_SKIP_USER_ZERO", "1") not in ("0", "false", "False")
+# ★输出锐化(unsharp mask)。生成帧只还原了参考图 53% 的高频细节(实测锐度 365→206)——
+#   这是 motion autoencoder 解码器从 512 维运动潜码重建的固有上限,不是精度问题
+#   (bf16/fp16/fp32 实测锐度完全一样)。锐化不能凭空造细节,但能把已有的边缘提回来。
+#   实测:0.6 视觉上明显更清楚且自然;1.2 过锐(皱纹被刻出来、眼镜边缘起光晕)。
+#   代价 0.89ms/帧 = 8.9ms/块,跑在线程池里。0=关。
+SHARPEN = float(os.environ.get("AF_SHARPEN", "0"))
+SHARPEN_R = float(os.environ.get("AF_SHARPEN_R", "1.6"))   # 高斯半径
 MAX_Q = int(os.environ.get("AF_MAX_Q", "15"))  # 输出队列上限(帧)：超了暂停生成。防无界堆积→音视频落后十几秒。15≈0.6s缓冲
 REANCHOR_S = float(os.environ.get("AF_REANCHOR_S", "12"))  # 每隔多少秒倾听生成就重锚一次清漂移(0=关)。缩短=漂移更小、过渡更顺
+# ★治疗师输入缓冲上限(帧)。消费恒定 25fps(每块取 NB=10)，而摄像头实际可能更快
+#   (2026-08-19 实测 ~29.3fps)→ 缓冲只涨不消:live 日志里 user_frames 125 秒从 269 涨到 862，
+#   倾听时镜像的就是治疗师 ~30 秒前的样子，越聊越旧;存的还是原始摄像头图，同时也在吃内存。
+#   超限就丢最旧的:反应要的是"此刻"，不是排队。干跑验证滞后 10.3s → 0.68s。
+MAX_USER_FRAMES = int(os.environ.get("AF_MAX_USER_FRAMES", "30"))   # 3 块 = 1.2s
 REANCHOR_FRAMES = int(REANCHOR_S * FPS)
 XFADE = int(os.environ.get("AF_XFADE", "8"))   # 重锚淡入淡出帧数(~0.32s)：漂移脸→干净脸做溶解，盖住"跳变"。0=关过渡
 
@@ -75,6 +106,7 @@ class AvatarForcingVideoService(AIService):
         self._user_frames = []           # 治疗师帧（已转引擎张量 [1,3,512,512]）
         self._last_cam_ts = None         # 上次收到摄像头帧的时刻（判断摄像头是否在开）
         self._dbg_cam = 0                # 诊断：收到多少摄像头帧
+        self._dbg_drop = 0               # 诊断：因超限丢弃的旧摄像头帧数
         self._dbg_tick = 0               # 诊断：生成循环计数
         self._face_box = None            # 缓存的人脸框 (mx,my,bs)，避免每帧检测
         self._face_ctr = 0               # 人脸检测计数（每 FACE_REDETECT 帧重检）
@@ -162,9 +194,11 @@ class AvatarForcingVideoService(AIService):
             return                                            # 不立即透传 → 在播放循环里和视频帧一起发(同步)
         elif isinstance(frame, InputAudioRawFrame):
             self._user_pcm += self._to_16k_mono(frame)        # 治疗师音频 → 反应
+            self._trim_user_buffers()
         elif isinstance(frame, InputImageRawFrame):
             try:
                 self._user_frames.append(self._decode_raw(frame))       # 廉价解码存原图，裁脸放线程池
+                self._trim_user_buffers()
                 self._last_cam_ts = asyncio.get_running_loop().time()    # 标记摄像头在开
                 self._dbg_cam += 1
                 if self._dbg_cam <= 3 or self._dbg_cam % 50 == 0:
@@ -207,7 +241,8 @@ class AvatarForcingVideoService(AIService):
                 continue                                      # 无摄像头的沉默：冻结(防漂移)
 
             if mode == "listen" and self._dbg_tick % 25 == 0:
-                logger.info(f"🙂 倾听反应中 u_cfg={U_LISTEN} user_frames={len(self._user_frames)}")
+                logger.info(f"🙂 倾听反应中 u_cfg={U_LISTEN} a_cfg={A_LISTEN} "
+                            f"user_frames={len(self._user_frames)}")
             self._dbg_tick += 1
 
             # ★背压：队列已堆够就暂停生成，等消费者按 25fps 播放。否则生成快于播放、队列无界增长，
@@ -246,10 +281,14 @@ class AvatarForcingVideoService(AIService):
             # ---- 按模式配置引擎 ----
             if mode == "speak":
                 self._engine.u_cfg_scale = U_SPEAK            # 干净对口型，弱反应
+                self._engine.a_cfg_scale = A_SPEAK            # 音频条件：说话时要它强，口型才准
+                self._engine.pose_reg = POSE_REG_SPEAK        # ★弱：别把说话时的大幅头部动作拽回中位
                 a_pcm = self._pop_audio(self._avatar_pcm)     # TTS（flush 时不足补静音）
                 emit_audio = True
             else:  # listen
                 self._engine.u_cfg_scale = U_LISTEN           # 强反应：真实人脸/语音驱动
+                self._engine.a_cfg_scale = A_LISTEN           # ★调低=松开"静音→别动"的压制，让反应冒出来
+                self._engine.pose_reg = POSE_REG_LISTEN       # ★强：压幅度、防漂移、维持抑郁基线
                 a_pcm = b"\x00" * BYTES_PER_BLOCK             # avatar 静音 → 嘴闭
                 emit_audio = False
 
@@ -257,25 +296,24 @@ class AvatarForcingVideoService(AIService):
                 u_pcm = self._pop_audio(self._user_pcm)
                 u_frames = self._take_user_frames()
                 _t = loop.time()                                  # 计时：引擎块耗时
-                result = await loop.run_in_executor(
+                # 说话且 u_cfg=0 → 跳过整条治疗师视觉通道（那一路乘 0 丢弃，纯白算）
+                skip_user = (mode == "speak" and SKIP_USER_ZERO and U_SPEAK == 0.0)
+                frames = await loop.run_in_executor(
                     None, self._engine_push,
-                    self._pcm_to_tensor(a_pcm), self._pcm_to_tensor(u_pcm), u_frames)
+                    self._pcm_to_tensor(a_pcm), self._pcm_to_tensor(u_pcm), u_frames, skip_user)
                 self._blk_n += 1
                 if self._blk_n % 25 == 0:
                     logger.info(f"⏱ 引擎块耗时 {(loop.time()-_t)*1000:.0f}ms (mode={mode}, rctx={RCTX})")
 
-                n = sum(int(b.shape[0]) for b in result)
+                n = len(frames)
                 if n == 0:
                     continue
                 # 说话：取对应原始音频按帧切片同步发；倾听：无音频(Jordan 在听)
                 audio = self._pop_tts_audio(n) if emit_audio else b""
                 bpf = self._frame_audio_bytes()
-                idx = 0
-                for blk in result:                           # blk: [n,3,512,512]
-                    for i in range(blk.shape[0]):
-                        aud = audio[idx * bpf:(idx + 1) * bpf] if (emit_audio and bpf) else b""
-                        await self._out_q.put((self._to_output_frame(blk[i]), aud))
-                        idx += 1
+                for idx, f in enumerate(frames):             # 帧已在线程池里转好
+                    aud = audio[idx * bpf:(idx + 1) * bpf] if (emit_audio and bpf) else b""
+                    await self._out_q.put((f, aud))
                 self._frames_since_anchor += n           # 重锚计数
             except Exception as e:
                 # 单块出错就跳过 + 记录，绝不让整个生成循环死掉（避免画面永久冻结）
@@ -310,11 +348,21 @@ class AvatarForcingVideoService(AIService):
                     audio=aud, sample_rate=self._tts_sr, num_channels=1))
 
     # ---------- 小工具 ----------
-    def _engine_push(self, a_aud, u_aud, u_raw):
-        # 在线程池里做人脸裁剪（别卡事件循环），再喂引擎
-        u_frames = [self._crop_to_tensor(r) for r in u_raw]
+    def _engine_push(self, a_aud, u_aud, u_raw, skip_user=False):
+        """线程池里跑完整条重活：人脸裁剪 → 引擎 → 出图转帧。返回 OutputImageRawFrame 列表。
+
+        ★出图转换(_to_output_frame)以前留在事件循环里做，10 帧 40ms —— 正好一个帧周期，
+          直接偷 _emit_loop 的 25fps 节拍预算。搬进来后事件循环只剩排队。
+        ★skip_user：说话态且 u_cfg==0 时，user 那路 CFG 分支乘 0 丢弃，
+          人脸检测(27.8ms)+裁剪(19.5ms)+运动编码(20ms)全是白算，整条跳过。"""
+        if skip_user:
+            u_frames, n_zero = None, len(u_raw)
+        else:
+            u_frames, n_zero = [self._crop_to_tensor(r) for r in u_raw], 0
         with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            return self._engine.push(a_aud, u_aud, u_frames)
+            result = self._engine.push(a_aud, u_aud, u_frames, user_motion_zero=n_zero)
+        return [self._to_output_frame(blk[i])
+                for blk in result for i in range(blk.shape[0])]
 
     def _warmup(self):
         """启动预热：用静音音频 + 空白帧空跑 first_block(50帧)+step(10帧)，
@@ -327,13 +375,28 @@ class AvatarForcingVideoService(AIService):
             need = self._engine.NC + NB                          # first_block(50)+至少一个 step(10)
             for _ in range(16):                                  # 每次喂 10 帧；rctx 前瞻下约 7~8 次出首块
                 res = self._engine_push(a, a, [None] * NB)
-                produced += sum(int(b.shape[0]) for b in res)
+                produced += len(res)
                 if produced >= need:
                     break
         except Exception as e:
             logger.warning(f"预热跳过(不致命): {e}")
         finally:
             self._engine.begin_live(self._avatar_ref)            # 重置，丢弃预热状态
+
+    def _trim_user_buffers(self):
+        """治疗师画面/声音只保留最近 MAX_USER_FRAMES 帧，超出的丢最旧的。
+        画面和声音按同一个时长窗口裁，避免两路错开(嘴对的是 A 时刻的声、脸是 B 时刻的)。"""
+        n_over = len(self._user_frames) - MAX_USER_FRAMES
+        if n_over > 0:
+            del self._user_frames[:n_over]
+            self._dbg_drop += n_over
+            if self._dbg_drop == n_over or self._dbg_drop % 250 < n_over:
+                logger.info(f"🗑 治疗师画面缓冲超限，已累计丢弃 {self._dbg_drop} 帧旧画面 "
+                            f"(上限 {MAX_USER_FRAMES} 帧≈{MAX_USER_FRAMES/FPS:.1f}s，"
+                            f"摄像头比 25fps 快时正常)")
+        max_bytes = MAX_USER_FRAMES * SPF * 2
+        if len(self._user_pcm) > max_bytes:
+            del self._user_pcm[:len(self._user_pcm) - max_bytes]
 
     def _take_user_frames(self):
         """取 NB 帧治疗师原始画面（np RGB）；不够补 None（裁剪时→空白帧）。"""
@@ -444,5 +507,11 @@ class AvatarForcingVideoService(AIService):
         return iv                                         # [1, samples]
 
     def _to_output_frame(self, img: torch.Tensor) -> OutputImageRawFrame:
-        arr = ((img.clamp(-1, 1) + 1) * 127.5).byte().permute(1, 2, 0).cpu().numpy()  # [512,512,3] RGB
+        # ★.contiguous() 必须在 .cpu() 之前：permute 后张量非连续，.cpu() 会走慢路径，
+        #   numpy().tobytes() 又在 CPU 上再拷一次。实测 4.03ms/帧 → 0.20ms/帧（20倍）。
+        arr = ((img.clamp(-1, 1) + 1) * 127.5).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+        if SHARPEN > 0:                       # unsharp mask:把解码器丢掉的边缘对比提回来
+            import cv2
+            blur = cv2.GaussianBlur(arr, (0, 0), SHARPEN_R)
+            arr = cv2.addWeighted(arr, 1 + SHARPEN, blur, -SHARPEN, 0)
         return OutputImageRawFrame(image=arr.tobytes(), size=(512, 512), format="RGB")
