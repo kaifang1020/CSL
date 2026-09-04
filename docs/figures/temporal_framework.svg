@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1520" height="1149.6000000000001" viewBox="0 0 1520 1149.6000000000001" font-family="Inter, -apple-system, Helvetica Neue, Arial, sans-serif">
+<rect width="1520" height="1149.6000000000001" fill="#FFFFFF"/>
+<defs><linearGradient id="ax" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D7DEE8"/><stop offset="1" stop-color="#0F172A"/></linearGradient></defs>
+<text x="40" y="46" font-size="28" font-weight="700" fill="#0F172A" letter-spacing="-0.5">Avatar Evaluation — Temporal Hierarchical Framework</text>
+<text x="40" y="75" font-size="14.5" fill="#475569">Each timescale is assessed on two independent axes. A metric belongs to the smallest level at which its failure becomes visible.</text>
+<line x1="40" y1="94" x2="1480" y2="94" stroke="#E2E8F0" stroke-width="1.4"/>
+<rect x="78" y="116" width="692" height="58" rx="9" fill="#F4F8FF" stroke="#C7D9FA" stroke-width="1.3"/>
+<text x="98" y="141" font-size="15" font-weight="700" fill="#1D4ED8" letter-spacing="0.7">A &#183; TECHNICAL FIDELITY</text>
+<text x="98" y="161" font-size="12.8" fill="#475569">Does the system render the interaction correctly?</text>
+<rect x="788" y="116" width="692" height="58" rx="9" fill="#FFFAF2" stroke="#F3DCB3" stroke-width="1.3"/>
+<text x="808" y="141" font-size="15" font-weight="700" fill="#B45309" letter-spacing="0.7">B &#183; PSYCHOLOGICAL FIDELITY</text>
+<text x="808" y="161" font-size="12.8" fill="#475569">Does the simulated patient behave plausibly?</text>
+<line x1="52" y1="196" x2="52" y2="925.6000000000001" stroke="url(#ax)" stroke-width="2.4" stroke-linecap="round"/>
+<path d="M 46.5 916.6000000000001 L 52 928.6000000000001 L 57.5 916.6000000000001 Z" fill="#0F172A"/>
+<circle cx="52" cy="209" r="6.5" fill="#FFFFFF" stroke="#0F172A" stroke-width="2.3"/>
+<text x="78" y="214" font-size="16" font-weight="700" fill="#0F172A" letter-spacing="0.4">FRAME</text>
+<text x="149" y="214" font-size="12.6" font-weight="600" fill="#64748B">≈ 40 ms  ·  one rendered image</text>
+<text x="808" y="214" font-size="12.8" font-style="italic" fill="#64748B">Freeze the video. Is this single image correct?</text>
+<rect x="78" y="230" width="692" height="130.60000000000002" rx="10" fill="#F4F8FF" stroke="#C7D9FA" stroke-width="1.2"/>
+<rect x="78" y="230" width="4.5" height="130.60000000000002" rx="2.2" fill="#1D4ED8" opacity="0.6"/>
+<circle cx="104" cy="251" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="256" font-size="15.5" font-weight="650" fill="#0F172A">Identity consistency</text>
+<text x="116" y="271" font-size="12.4" fill="#475569">CSIM · ArcFace similarity against the reference portrait</text>
+<circle cx="104" cy="296.2" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="301.2" font-size="15.5" font-weight="650" fill="#0F172A">Image quality</text>
+<text x="116" y="316.2" font-size="12.4" fill="#475569">sharpness (Laplacian variance) · FID, aggregated across frames · LPIPS — requires a ground-truth</text>
+<text x="116" y="332.4" font-size="12.4" fill="#475569">frame, so controlled replay only</text>
+<rect x="788" y="230" width="692" height="79.4" rx="10" fill="#FFFAF2" stroke="#F3DCB3" stroke-width="1.2"/>
+<rect x="788" y="230" width="4.5" height="79.4" rx="2.2" fill="#B45309" opacity="0.6"/>
+<circle cx="814" cy="251" r="3.2" fill="#B45309"/>
+<text x="826" y="256" font-size="15.5" font-weight="650" fill="#0F172A">Facial-state congruence</text>
+<text x="826" y="271" font-size="12.4" fill="#475569">blinded expression rating against the intended state; sadness must not render as happiness,</text>
+<text x="826" y="287.2" font-size="12.4" fill="#475569">restricted affect must not become exaggerated</text>
+<circle cx="52" cy="399.6" r="6.5" fill="#FFFFFF" stroke="#0F172A" stroke-width="2.3"/>
+<text x="78" y="404.6" font-size="16" font-weight="700" fill="#0F172A" letter-spacing="0.4">TURN</text>
+<text x="138" y="404.6" font-size="12.6" font-weight="600" fill="#64748B">seconds  ·  one patient–therapist exchange</text>
+<text x="808" y="404.6" font-size="12.8" font-style="italic" fill="#64748B">Play one exchange. Does it move correctly and respond correctly?</text>
+<rect x="78" y="420.6" width="692" height="216.8" rx="10" fill="#F4F8FF" stroke="#C7D9FA" stroke-width="1.2"/>
+<rect x="78" y="420.6" width="4.5" height="216.8" rx="2.2" fill="#1D4ED8" opacity="0.6"/>
+<circle cx="104" cy="441.6" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="446.6" font-size="15.5" font-weight="650" fill="#0F172A">Temporal coherence</text>
+<text x="116" y="461.6" font-size="12.4" fill="#475569">landmark displacement · jitter rate · flicker rate · freeze rate</text>
+<circle cx="104" cy="486.8" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="491.8" font-size="15.5" font-weight="650" fill="#0F172A">Audio-visual synchronisation</text>
+<text x="116" y="506.8" font-size="12.4" fill="#475569">LSE-D / LSE-C (SyncNet, 5-frame window) · lip-landmark error — requires a ground-truth mouth shape</text>
+<circle cx="104" cy="532.0" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="537.0" font-size="15.5" font-weight="650" fill="#0F172A">Responsiveness</text>
+<text x="116" y="552.0" font-size="12.4" fill="#475569">time-to-first-response · end-to-end latency · interruption recovery</text>
+<circle cx="104" cy="577.2" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="582.2" font-size="15.5" font-weight="650" fill="#0F172A">Listening behaviour</text>
+<text x="116" y="597.2" font-size="12.4" fill="#475569">natural resting face · mouth closure · idle-state animation</text>
+<rect x="788" y="420.6" width="692" height="249.20000000000002" rx="10" fill="#FFFAF2" stroke="#F3DCB3" stroke-width="1.2"/>
+<rect x="788" y="420.6" width="4.5" height="249.20000000000002" rx="2.2" fill="#B45309" opacity="0.6"/>
+<circle cx="814" cy="441.6" r="3.2" fill="#B45309"/>
+<text x="826" y="446.6" font-size="15.5" font-weight="650" fill="#0F172A">Response appropriateness</text>
+<text x="826" y="461.6" font-size="12.4" fill="#475569">blinded clinician rating of appropriateness · off-target response rate</text>
+<circle cx="814" cy="486.8" r="3.2" fill="#B45309"/>
+<text x="826" y="491.8" font-size="15.5" font-weight="650" fill="#0F172A">Conditional behavioural response</text>
+<text x="826" y="506.8" font-size="12.4" fill="#475569">paired-probe design: same content delivered with different stances, measuring divergence in the</text>
+<text x="826" y="523.0" font-size="12.4" fill="#475569">reply</text>
+<circle cx="814" cy="548.2" r="3.2" fill="#B45309"/>
+<text x="826" y="553.2" font-size="15.5" font-weight="650" fill="#0F172A">Interactional style</text>
+<text x="826" y="568.2" font-size="12.4" fill="#475569">response length distribution · elaboration rate · hesitation and self-repair markers · turn-taking</text>
+<text x="826" y="584.4000000000001" font-size="12.4" fill="#475569">pattern</text>
+<circle cx="814" cy="609.6000000000001" r="3.2" fill="#B45309"/>
+<text x="826" y="614.6000000000001" font-size="15.5" font-weight="650" fill="#0F172A">Cross-modal state congruence</text>
+<text x="826" y="629.6000000000001" font-size="12.4" fill="#475569">blinded 1–5 compatibility rating across the four modalities · unsupported contradiction rate</text>
+<circle cx="52" cy="708.8000000000001" r="6.5" fill="#FFFFFF" stroke="#0F172A" stroke-width="2.3"/>
+<text x="78" y="713.8000000000001" font-size="16" font-weight="700" fill="#0F172A" letter-spacing="0.4">SESSION</text>
+<text x="171" y="713.8000000000001" font-size="12.6" font-weight="600" fill="#64748B">tens of minutes  ·  the entire trajectory</text>
+<text x="808" y="713.8000000000001" font-size="12.8" font-style="italic" fill="#64748B">Watch the whole session. Is it still the same person, and did the system hold up?</text>
+<rect x="78" y="729.8000000000001" width="692" height="165.60000000000002" rx="10" fill="#F4F8FF" stroke="#C7D9FA" stroke-width="1.2"/>
+<rect x="78" y="729.8000000000001" width="4.5" height="165.60000000000002" rx="2.2" fill="#1D4ED8" opacity="0.6"/>
+<circle cx="104" cy="750.8000000000001" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="755.8000000000001" font-size="15.5" font-weight="650" fill="#0F172A">Longitudinal visual consistency</text>
+<text x="116" y="770.8000000000001" font-size="12.4" fill="#475569">CSIM curve · FVD · cumulative jitter</text>
+<circle cx="104" cy="796.0000000000001" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="801.0000000000001" font-size="15.5" font-weight="650" fill="#0F172A">Identity drift</text>
+<text x="116" y="816.0000000000001" font-size="12.4" fill="#475569">ArcFace similarity-curve slope · drift-onset time · sustained-drift event rate</text>
+<circle cx="104" cy="841.2000000000002" r="3.2" fill="#1D4ED8"/>
+<text x="116" y="846.2000000000002" font-size="15.5" font-weight="650" fill="#0F172A">System reliability</text>
+<text x="116" y="861.2000000000002" font-size="12.4" fill="#475569">failure incidents · sustained throughput (real-time factor) · computational cost</text>
+<rect x="788" y="729.8000000000001" width="692" height="181.8" rx="10" fill="#FFFAF2" stroke="#F3DCB3" stroke-width="1.2"/>
+<rect x="788" y="729.8000000000001" width="4.5" height="181.8" rx="2.2" fill="#B45309" opacity="0.6"/>
+<circle cx="814" cy="750.8000000000001" r="3.2" fill="#B45309"/>
+<text x="826" y="755.8000000000001" font-size="15.5" font-weight="650" fill="#0F172A">Persona consistency</text>
+<text x="826" y="770.8000000000001" font-size="12.4" fill="#475569">case-fact consistency · personality / state distribution fidelity</text>
+<circle cx="814" cy="796.0000000000001" r="3.2" fill="#B45309"/>
+<text x="826" y="801.0000000000001" font-size="15.5" font-weight="650" fill="#0F172A">Clinical coherence</text>
+<text x="826" y="816.0000000000001" font-size="12.4" fill="#475569">symptom–impairment compatibility audit · contradiction rate against the case ground truth</text>
+<circle cx="814" cy="841.2000000000002" r="3.2" fill="#B45309"/>
+<text x="826" y="846.2000000000002" font-size="15.5" font-weight="650" fill="#0F172A">State dynamics</text>
+<text x="826" y="861.2000000000002" font-size="12.4" fill="#475569">within-session state change · recovery after emotional activation · trajectory shape (waveform vs</text>
+<text x="826" y="877.4000000000002" font-size="12.4" fill="#475569">monotonic decline)</text>
+<rect x="40" y="947.6000000000001" width="1440" height="188" rx="10" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.3"/>
+<text x="62" y="973.6000000000001" font-size="13.4" font-weight="700" fill="#0F172A">Levelling rule</text>
+<text x="62" y="993.6000000000001" font-size="12.8" fill="#475569">A metric belongs to the smallest level at which its failure becomes visible. A blurred face shows up in a single still (frame); jitter is invisible in a still but obvious over a few seconds (turn); identity drift only</text>
+<text x="62" y="1010.6000000000001" font-size="12.8" fill="#475569">emerges across the whole conversation (session).</text>
+<text x="62" y="1032.6000000000001" font-size="13.4" font-weight="700" fill="#0F172A">Sample size is not a level</text>
+<text x="62" y="1052.6000000000001" font-size="12.8" fill="#475569">How many samples an estimator needs is a property of the statistic, not of the level. FID requires thousands of frames, but what it tests — whether an individual frame looks real — is a frame-level property, so it</text>
+<text x="62" y="1069.6000000000001" font-size="12.8" fill="#475569">stays at frame level.</text>
+<text x="62" y="1091.6000000000001" font-size="13.4" font-weight="700" fill="#0F172A">Reporting principle</text>
+<text x="62" y="1111.6000000000001" font-size="12.8" fill="#475569">Do not average the metrics into a single score. Report a temporal profile: frame → perceptual realism, turn → interaction quality, session → identity and trajectory. Separating the two axes keeps a technical artifact</text>
+<text x="62" y="1128.6000000000001" font-size="12.8" fill="#475569">(e.g. a lip-sync failure) from being misread as a psychological failure (e.g. an implausible emotional reaction).</text>
+</svg>

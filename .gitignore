@@ -44,3 +44,9 @@ tools/node_modules/
 
 # 论文页面截图(第三方版权,不可再分发)
 john-page-*.jpg
+
+# 参考帧 / 人脸素材：标准化病人培训视频里的真实演员，可识别面部 + 版权素材。
+# 本仓库是公开的，这些不入库。换机器时用 rsync 单独传（见 deploy.sh）。
+data/
+frozen/v1-golden/ref_frames/
+*.bak

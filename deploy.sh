@@ -20,7 +20,7 @@ rsync -avz -e "$SSH" \
 
 echo "==== [2/3] bot 文件（Avatar 项目）→ $HOST ===="
 rsync -avz -e "$SSH" \
-  "$BOT/patient_jordan.py" "$BOT/patient_candice.py" "$BOT/patient_savannah.py" \
+  "$BOT/patient_jordan.py" "$BOT/patient_candice.py" "$BOT/patient_savannah.py" "$BOT/patient_greg.py" \
   "$BOT/avatarforcing_service.py" \
   "$BOT/session_log.py" "$BOT/vision.py" "$BOT/ser.py" "$BOT/.env" \
   "$DST/"
