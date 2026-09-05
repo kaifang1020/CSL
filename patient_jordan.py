@@ -970,6 +970,19 @@ def _build_stt():
         )
 
 
+# 每个 persona 的固定语气(emotion, speed, volume)。persona_only 没有状态机,不做动态调节。
+#   Greg     —— 人设原词就是 "resigned"、"affect flatter than a younger patient's":平、慢、轻。
+#   Savannah —— "worn out and easily stung",不是低落是没劲:略慢,不压音量。
+#   Candice  —— 开场是一段爆发("near the peak of her distress"),她【本来就该听起来激动】,
+#               给她配平淡的声音反而是错的。所以只给轻微的 anxious,不减速。
+#   都可以用 AF_TTS_EMOTION / AF_TTS_SPEED / AF_TTS_VOLUME 临时覆盖(调参用)。
+PERSONA_VOICE = {
+    "greg":     ("resigned", 0.75, 0.9),
+    "savannah": ("tired",    0.92, 1.0),
+    "candice":  ("anxious",  1.0,  1.0),
+}
+
+
 def _build_tts():
     """TTS 选择:.env 里 TTS=cartesia → Cartesia(低延迟);否则默认 OpenAI。
     返回 (kind, service)。kind 用来告诉 PatientBrain 怎么构造语气设置。"""
@@ -984,9 +997,25 @@ def _build_tts():
         _vid = os.environ.get(f"CARTESIA_VOICE_{PATIENT.upper()}") or os.environ.get(
             "CARTESIA_VOICE_ID", "71a7ad14-091c-4e8e-a314-022ece01c121")
         logger.info(f"Cartesia voice({PATIENT}): {_vid}")
+        # ★persona 固定语气。persona_only(Candice/Savannah/Greg)没有状态机,
+        #   PatientBrain 里那段"按状态动态调 TTS 语气"被 `if not self.persona_only` 挡掉了,
+        #   结果是【完全没有任何语气控制】——克隆出来什么样,每一轮就什么样。
+        #   generation_config 只在 Sonic-3+ 上生效(pipecat 默认 sonic-3.5);
+        #   实测 sonic-2 完全忽略它,而 sonic-3.5 上 speed 0.8/0.7/0.6 的时长都高于全部基线。
+        #   emotion 取值来自 CartesiaEmotion(59 个),这里挑的是与人设同义的那个词。
+        _emo, _spd, _vol = PERSONA_VOICE.get(PATIENT, (None, None, None))
+        _emo = os.environ.get("AF_TTS_EMOTION", _emo) or None
+        _spd = float(os.environ.get("AF_TTS_SPEED", _spd)) if (os.environ.get("AF_TTS_SPEED") or _spd) else None
+        _vol = float(os.environ.get("AF_TTS_VOLUME", _vol)) if (os.environ.get("AF_TTS_VOLUME") or _vol) else None
+        _gc = None
+        if _emo or _spd or _vol:
+            from pipecat.services.cartesia.tts import GenerationConfig
+            _gc = GenerationConfig(emotion=_emo, speed=_spd, volume=_vol)
+            logger.info(f"Cartesia 语气({PATIENT}): emotion={_emo} speed={_spd} volume={_vol}")
         return "cartesia", CartesiaTTSService(
             api_key=os.environ["CARTESIA_API_KEY"],
             voice_id=_vid,
+            params=CartesiaTTSService.InputParams(generation_config=_gc) if _gc else None,
             text_filters=[CleanTextFilter()],
         )
     logger.info("TTS: OpenAI gpt-4o-mini-tts")
